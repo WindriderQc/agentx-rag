@@ -1,3 +1,0 @@
-{"error":"Core embed proxy error: 404 - {\"status\":\"error\",\"message\":\"API endpoint not found: POST /inference/embed\",\"code\":\"API_NOT_FOUND\"}","level":"error","message":"Error generating embedding via core proxy","timestamp":"2026-03-22 05:10:22"}
-{"error":"Core embed proxy error: 404 - {\"status\":\"error\",\"message\":\"API endpoint not found: POST /inference/embed\",\"code\":\"API_NOT_FOUND\"}","level":"error","message":"Error generating embedding via core proxy","timestamp":"2026-03-22 05:10:27"}
-{"error":"Core embed proxy error: 404 - {\"status\":\"error\",\"message\":\"API endpoint not found: POST /inference/embed\",\"code\":\"API_NOT_FOUND\"}","level":"error","message":"Error generating embedding via core proxy","timestamp":"2026-03-22 05:13:58"}
