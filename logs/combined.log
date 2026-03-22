@@ -1,0 +1,12 @@
+{"db":"agentx","host":"192.168.2.33","level":"info","message":"MongoDB connected","port":27017,"timestamp":"2026-03-22 05:09:44"}
+{"level":"info","message":"agentx-rag listening on :::3082","timestamp":"2026-03-22 05:09:44"}
+{"level":"info","message":"Using in-memory vector store (data will not persist across restarts)","timestamp":"2026-03-22 05:10:12"}
+{"level":"info","message":"EmbeddingsService initialized (core proxy mode)","model":"nomic-embed-text:v1.5","timestamp":"2026-03-22 05:10:12"}
+{"chunkOverlap":50,"chunkSize":500,"level":"warn","message":"Chunking forced advance","minAdvance":50,"newStart":50,"oldStart":0,"timestamp":"2026-03-22 05:10:22"}
+{"error":"Core embed proxy error: 404 - {\"status\":\"error\",\"message\":\"API endpoint not found: POST /inference/embed\",\"code\":\"API_NOT_FOUND\"}","level":"error","message":"Error generating embedding via core proxy","timestamp":"2026-03-22 05:10:22"}
+{"level":"warn","message":"Ingest blocked: EMBEDDING_SERVICE_UNAVAILABLE — Failed to generate embedding: Core embed proxy error: 404 - {\"status\":\"error\",\"message\":\"API endpoint not found: POST /inference/embed\",\"code\":\"API_NOT_FOUND\"}","timestamp":"2026-03-22 05:10:22"}
+{"error":"Core embed proxy error: 404 - {\"status\":\"error\",\"message\":\"API endpoint not found: POST /inference/embed\",\"code\":\"API_NOT_FOUND\"}","level":"error","message":"Error generating embedding via core proxy","timestamp":"2026-03-22 05:10:27"}
+{"level":"warn","message":"Search blocked: EMBEDDING_SERVICE_UNAVAILABLE — Failed to generate embedding: Core embed proxy error: 404 - {\"status\":\"error\",\"message\":\"API endpoint not found: POST /inference/embed\",\"code\":\"API_NOT_FOUND\"}","timestamp":"2026-03-22 05:10:27"}
+{"chunkOverlap":50,"chunkSize":500,"level":"warn","message":"Chunking forced advance","minAdvance":50,"newStart":50,"oldStart":0,"timestamp":"2026-03-22 05:13:58"}
+{"error":"Core embed proxy error: 404 - {\"status\":\"error\",\"message\":\"API endpoint not found: POST /inference/embed\",\"code\":\"API_NOT_FOUND\"}","level":"error","message":"Error generating embedding via core proxy","timestamp":"2026-03-22 05:13:58"}
+{"level":"warn","message":"Ingest blocked: EMBEDDING_SERVICE_UNAVAILABLE — Failed to generate embedding: Core embed proxy error: 404 - {\"status\":\"error\",\"message\":\"API endpoint not found: POST /inference/embed\",\"code\":\"API_NOT_FOUND\"}","timestamp":"2026-03-22 05:13:58"}
