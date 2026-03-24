@@ -22,6 +22,15 @@ class RagStore {
     const chunkSize = metadata.chunkSize || this.defaultChunkSize;
     const chunkOverlap = metadata.chunkOverlap || this.defaultChunkOverlap;
 
+    // Content hash unchanged detection — skip re-ingestion if hash matches
+    if (metadata.hash) {
+      const existing = await this.vectorStore.getDocument(documentId);
+      if (existing && existing.hash === metadata.hash) {
+        logger.info(`Document "${documentId}" unchanged (hash match) — skipping ingestion`);
+        return { unchanged: true, documentId };
+      }
+    }
+
     const textChunks = splitIntoChunks(text, chunkSize, chunkOverlap);
     if (textChunks.length === 0) {
       throw new Error('No chunks generated from text');
@@ -39,6 +48,7 @@ class RagStore {
     const result = await this.vectorStore.upsertDocument(documentId, {
       source: metadata.source,
       tags: metadata.tags || [],
+      ...(metadata.hash ? { hash: metadata.hash } : {}),
     }, chunks);
 
     logger.info(`Upserted document "${documentId}" — ${chunks.length} chunks`);
