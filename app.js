@@ -20,9 +20,18 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', service: 'agentx-rag', port: 3082 });
+  const dbReady = require('mongoose').connection.readyState === 1;
+  const status = dbReady ? 'ok' : 'degraded';
+  res.status(dbReady ? 200 : 503).json({
+    status,
+    service: 'agentx-rag',
+    port: parseInt(process.env.PORT, 10) || 3082,
+    db: dbReady ? 'connected' : 'disconnected'
+  });
 });
 
 app.use('/api/rag', require('./routes/rag'));
+app.use('/api/rag', require('./routes/document.routes'));
+app.use('/api/rag', require('./routes/manifest.routes'));
 
 module.exports = app;

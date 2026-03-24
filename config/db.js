@@ -26,9 +26,7 @@ const connectDB = async () => {
     });
   } catch (err) {
     logger.error('MongoDB connection failed', { error: err.message });
-    if (process.env.NODE_ENV === 'test') {
-      throw err;
-    }
+    throw err;
   }
 };
 
