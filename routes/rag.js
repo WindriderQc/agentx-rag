@@ -33,13 +33,13 @@ async function handleIngest(req, res) {
   try {
     const { text, source, tags, chunkSize, chunkOverlap, documentId } = req.body;
     if (!text || typeof text !== 'string' || text.trim().length === 0) {
-      return res.status(400).json({ error: 'text is required and must be a non-empty string' });
+      return res.status(400).json({ ok: false, error: 'text is required and must be a non-empty string' });
     }
     if (source && typeof source !== 'string') {
-      return res.status(400).json({ error: 'source must be a string' });
+      return res.status(400).json({ ok: false, error: 'source must be a string' });
     }
     if (tags && !Array.isArray(tags)) {
-      return res.status(400).json({ error: 'tags must be an array' });
+      return res.status(400).json({ ok: false, error: 'tags must be an array' });
     }
 
     const ragStore = getRagStore();
@@ -51,15 +51,15 @@ async function handleIngest(req, res) {
       documentId
     });
 
-    res.json({ success: true, ...result });
+    res.json({ ok: true, data: result });
   } catch (err) {
     const classified = classifyRagAvailabilityError(err);
     if (classified) {
       logger.warn(`Ingest blocked: ${classified.code} — ${err.message}`);
-      return res.status(classified.status).json({ error: classified.code, detail: classified.detail });
+      return res.status(classified.status).json({ ok: false, error: classified.code, detail: classified.detail });
     }
     logger.error('Ingest error:', err);
-    res.status(500).json({ error: 'Ingest failed', detail: err.message });
+    res.status(500).json({ ok: false, error: 'Ingest failed', detail: err.message });
   }
 }
 
@@ -72,7 +72,7 @@ router.post('/search', async (req, res) => {
   try {
     const { query, topK, minScore, filters } = req.body;
     if (!query || typeof query !== 'string' || query.trim().length === 0) {
-      return res.status(400).json({ error: 'query is required and must be a non-empty string' });
+      return res.status(400).json({ ok: false, error: 'query is required and must be a non-empty string' });
     }
 
     const ragStore = getRagStore();
@@ -82,15 +82,15 @@ router.post('/search', async (req, res) => {
       filters
     });
 
-    res.json({ results, count: results.length });
+    res.json({ ok: true, data: { results, count: results.length } });
   } catch (err) {
     const classified = classifyRagAvailabilityError(err);
     if (classified) {
       logger.warn(`Search blocked: ${classified.code} — ${err.message}`);
-      return res.status(classified.status).json({ error: classified.code, detail: classified.detail });
+      return res.status(classified.status).json({ ok: false, error: classified.code, detail: classified.detail });
     }
     logger.error('Search error:', err);
-    res.status(500).json({ error: 'Search failed', detail: err.message });
+    res.status(500).json({ ok: false, error: 'Search failed', detail: err.message });
   }
 });
 
@@ -104,10 +104,10 @@ router.get('/documents', async (req, res) => {
 
     const ragStore = getRagStore();
     const documents = await ragStore.listDocuments(filters);
-    res.json({ documents, count: documents.length });
+    res.json({ ok: true, data: { documents, count: documents.length } });
   } catch (err) {
     logger.error('List documents error:', err);
-    res.status(500).json({ error: 'Failed to list documents', detail: err.message });
+    res.status(500).json({ ok: false, error: 'Failed to list documents', detail: err.message });
   }
 });
 
@@ -117,18 +117,18 @@ router.delete('/documents/:documentId', async (req, res) => {
   try {
     const { documentId } = req.params;
     if (!documentId) {
-      return res.status(400).json({ error: 'documentId is required' });
+      return res.status(400).json({ ok: false, error: 'documentId is required' });
     }
 
     const ragStore = getRagStore();
     const deleted = await ragStore.deleteDocument(documentId);
     if (!deleted) {
-      return res.status(404).json({ error: 'Document not found' });
+      return res.status(404).json({ ok: false, error: 'Document not found' });
     }
-    res.json({ success: true, documentId });
+    res.json({ ok: true, data: { documentId } });
   } catch (err) {
     logger.error('Delete document error:', err);
-    res.status(500).json({ error: 'Failed to delete document', detail: err.message });
+    res.status(500).json({ ok: false, error: 'Failed to delete document', detail: err.message });
   }
 });
 
@@ -138,10 +138,10 @@ router.get('/status', async (req, res) => {
   try {
     const ragStore = getRagStore();
     const stats = await ragStore.getStats();
-    res.json({ status: 'ok', ...stats });
+    res.json({ ok: true, data: stats });
   } catch (err) {
     logger.error('Status error:', err);
-    res.status(500).json({ status: 'error', detail: err.message });
+    res.status(500).json({ ok: false, error: 'Status check failed', detail: err.message });
   }
 });
 

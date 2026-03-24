@@ -3,6 +3,7 @@
  */
 
 const VectorStoreAdapter = require('./VectorStoreAdapter');
+const { cosineSimilarity } = require('../../utils/cosineSimilarity');
 
 class InMemoryVectorStore extends VectorStoreAdapter {
   constructor(config = {}) {
@@ -44,7 +45,7 @@ class InMemoryVectorStore extends VectorStoreAdapter {
 
     let results = this.vectors.map(vec => ({
       text: vec.text,
-      score: this._cosineSimilarity(queryEmbedding, vec.embedding),
+      score: cosineSimilarity(queryEmbedding, vec.embedding),
       metadata: vec.metadata
     }));
 
@@ -106,17 +107,6 @@ class InMemoryVectorStore extends VectorStoreAdapter {
     return { healthy: true, type: 'memory' };
   }
 
-  _cosineSimilarity(vecA, vecB) {
-    if (!vecA || !vecB || vecA.length !== vecB.length) return 0;
-    let dotProduct = 0, normA = 0, normB = 0;
-    for (let i = 0; i < vecA.length; i++) {
-      dotProduct += vecA[i] * vecB[i];
-      normA += vecA[i] * vecA[i];
-      normB += vecB[i] * vecB[i];
-    }
-    if (normA === 0 || normB === 0) return 0;
-    return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
-  }
 }
 
 module.exports = InMemoryVectorStore;

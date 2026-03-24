@@ -1,100 +1,55 @@
-/**
- * Embeddings Service for AgentX RAG
- *
- * Generates vector embeddings by proxying through core's inference endpoint.
- * Does NOT call Ollama directly — all embedding requests go through
- * CORE_PROXY_URL/api/inference/embed.
- */
-
-const fetch = require('node-fetch');
 const logger = require('../../config/logger');
+const CoreProxyProvider = require('./embeddings/coreProxyProvider');
+const OllamaProvider = require('./embeddings/ollamaProvider');
+
+function createEmbeddingsProvider(config = {}) {
+  const providerName = (config.embeddingProvider || process.env.EMBEDDING_PROVIDER || 'ollama-direct')
+    .trim()
+    .toLowerCase();
+
+  switch (providerName) {
+    case 'ollama-direct':
+      return new OllamaProvider(config);
+    case 'core-proxy':
+      return new CoreProxyProvider(config);
+    default:
+      throw new Error(`Unsupported embedding provider: ${providerName}`);
+  }
+}
 
 class EmbeddingsService {
   constructor(config = {}) {
-    this.coreProxyUrl = config.coreProxyUrl || process.env.CORE_PROXY_URL || 'http://localhost:3080';
-    this.model = config.embeddingModel || process.env.EMBEDDING_MODEL || 'nomic-embed-text:v1.5';
-    this.dimension = config.dimension || Number(process.env.EMBEDDING_DIMENSION) || 768;
-    this.batchSize = 10;
+    this.provider = createEmbeddingsProvider(config);
+    this.providerName = this.provider.name;
+    this.model = this.provider.model;
+    this.dimension = this.provider.getDimension();
   }
 
-  async embedTextBatch(texts, ollamaHost = null) {
-    if (!Array.isArray(texts) || texts.length === 0) {
-      throw new Error('texts must be a non-empty array');
-    }
-
-    const results = [];
-
-    for (let i = 0; i < texts.length; i += this.batchSize) {
-      const batch = texts.slice(i, i + this.batchSize);
-      const batchResults = await Promise.all(
-        batch.map(text => this._embedSingle(text, ollamaHost))
-      );
-      results.push(...batchResults);
-    }
-
-    return results;
+  async embed(text, preferredHost = null) {
+    return this.provider.embed(text, preferredHost);
   }
 
-  async _embedSingle(text, ollamaHost = null) {
-    if (!text || typeof text !== 'string') {
-      throw new Error('text must be a non-empty string');
-    }
-
-    const truncatedText = text.length > 8000 ? text.substring(0, 8000) : text;
-    return this._generateEmbedding(truncatedText, ollamaHost);
+  async embedBatch(texts, preferredHost = null) {
+    return this.provider.embedBatch(texts, preferredHost);
   }
 
-  async _generateEmbedding(text, ollamaHost) {
-    const url = `${this.coreProxyUrl}/api/inference/embed`;
-
-    try {
-      const body = {
-        model: this.model,
-        prompt: text,
-      };
-      if (ollamaHost) {
-        body.ollamaHost = ollamaHost;
-      }
-
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Core embed proxy error: ${response.status} - ${errorText}`);
-      }
-
-      const data = await response.json();
-
-      if (!data.embedding || !Array.isArray(data.embedding)) {
-        throw new Error('Invalid response from core embed proxy');
-      }
-
-      return data.embedding;
-    } catch (error) {
-      logger.error('Error generating embedding via core proxy', { error: error.message });
-      throw new Error(`Failed to generate embedding: ${error.message}`);
-    }
+  async embedTextBatch(texts, preferredHost = null) {
+    return this.embedBatch(texts, preferredHost);
   }
 
   getDimension() {
-    return this.dimension;
+    return this.provider.getDimension();
   }
 
   async testConnection() {
-    try {
-      const embedding = await this._embedSingle('test');
-      return Array.isArray(embedding) && embedding.length === this.dimension;
-    } catch (error) {
-      logger.error('Embeddings connection test failed', { error: error.message });
-      return false;
-    }
+    return this.provider.testConnection();
   }
 
-  destroy() {}
+  destroy() {
+    if (typeof this.provider.destroy === 'function') {
+      this.provider.destroy();
+    }
+  }
 
   static cosineSimilarity(vec1, vec2) {
     if (vec1.length !== vec2.length) {
@@ -123,19 +78,25 @@ let embeddingsServiceInstance = null;
 function getEmbeddingsService(config = {}) {
   if (!embeddingsServiceInstance) {
     embeddingsServiceInstance = new EmbeddingsService(config);
-    logger.info('EmbeddingsService initialized (core proxy mode)', { model: embeddingsServiceInstance.model });
+    logger.info('EmbeddingsService initialized', {
+      model: embeddingsServiceInstance.model,
+      provider: embeddingsServiceInstance.providerName
+    });
   }
+
   return embeddingsServiceInstance;
 }
 
 function resetEmbeddingsService() {
   if (!embeddingsServiceInstance) return;
+
   embeddingsServiceInstance.destroy();
   embeddingsServiceInstance = null;
 }
 
 module.exports = {
   EmbeddingsService,
+  createEmbeddingsProvider,
   getEmbeddingsService,
   resetEmbeddingsService,
 };

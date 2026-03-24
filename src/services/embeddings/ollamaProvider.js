@@ -1,0 +1,152 @@
+const fetch = require('node-fetch');
+const logger = require('../../../config/logger');
+
+class OllamaProvider {
+  constructor(config = {}) {
+    this.name = 'ollama-direct';
+    this.model = config.embeddingModel || process.env.EMBEDDING_MODEL || 'nomic-embed-text:v1.5';
+    this.dimension = config.dimension || Number(process.env.EMBEDDING_DIMENSION) || 768;
+    this.batchSize = config.batchSize || 10;
+    this.maxTextLength = config.maxTextLength || 8000;
+    this.hosts = this._parseHosts(config.ollamaHosts || process.env.OLLAMA_HOSTS || 'localhost:11434');
+    this.nextHostIndex = 0;
+  }
+
+  _parseHosts(rawHosts) {
+    const hosts = String(rawHosts)
+      .split(',')
+      .map((host) => this._normalizeHost(host))
+      .filter(Boolean);
+
+    if (hosts.length === 0) {
+      throw new Error('OLLAMA_HOSTS must contain at least one host');
+    }
+
+    return hosts;
+  }
+
+  _normalizeHost(host) {
+    const trimmed = String(host || '').trim().replace(/\/+$/, '');
+
+    if (!trimmed) {
+      return null;
+    }
+
+    return /^https?:\/\//.test(trimmed) ? trimmed : `http://${trimmed}`;
+  }
+
+  _getAttemptHosts(preferredHost = null) {
+    if (preferredHost) {
+      const normalizedPreferredHost = this._normalizeHost(preferredHost);
+      return [
+        normalizedPreferredHost,
+        ...this.hosts.filter((host) => host !== normalizedPreferredHost)
+      ];
+    }
+
+    const startIndex = this.nextHostIndex;
+    this.nextHostIndex = (this.nextHostIndex + 1) % this.hosts.length;
+
+    return [
+      ...this.hosts.slice(startIndex),
+      ...this.hosts.slice(0, startIndex)
+    ];
+  }
+
+  _truncateText(text) {
+    return text.length > this.maxTextLength
+      ? text.substring(0, this.maxTextLength)
+      : text;
+  }
+
+  _validateText(text) {
+    if (!text || typeof text !== 'string') {
+      throw new Error('text must be a non-empty string');
+    }
+  }
+
+  async embed(text, preferredHost = null) {
+    this._validateText(text);
+    return this._requestEmbedding(this._truncateText(text), preferredHost);
+  }
+
+  async embedBatch(texts, preferredHost = null) {
+    if (!Array.isArray(texts) || texts.length === 0) {
+      throw new Error('texts must be a non-empty array');
+    }
+
+    const results = [];
+
+    for (let i = 0; i < texts.length; i += this.batchSize) {
+      const batch = texts.slice(i, i + this.batchSize);
+      const batchResults = await Promise.all(
+        batch.map((text) => this.embed(text, preferredHost))
+      );
+      results.push(...batchResults);
+    }
+
+    return results;
+  }
+
+  async _requestEmbedding(text, preferredHost = null) {
+    const attemptHosts = this._getAttemptHosts(preferredHost);
+    let lastError = null;
+
+    for (const host of attemptHosts) {
+      try {
+        const response = await fetch(`${host}/api/embeddings`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: this.model,
+            prompt: text,
+          }),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`Ollama embedding error: ${response.status} - ${errorText}`);
+        }
+
+        const data = await response.json();
+
+        if (!data.embedding || !Array.isArray(data.embedding)) {
+          throw new Error('Invalid response from Ollama embeddings API');
+        }
+
+        return data.embedding;
+      } catch (error) {
+        lastError = error;
+        logger.warn('Ollama embedding host failed', { host, error: error.message });
+      }
+    }
+
+    logger.error('All Ollama embedding hosts failed', {
+      hosts: attemptHosts,
+      error: lastError ? lastError.message : 'Unknown error'
+    });
+
+    throw new Error(`Failed to generate embedding: ${lastError ? lastError.message : 'No Ollama hosts available'}`);
+  }
+
+  getDimension() {
+    return this.dimension;
+  }
+
+  async testConnection() {
+    try {
+      const embedding = await this.embed('test');
+      return Array.isArray(embedding) && embedding.length === this.dimension;
+    } catch (error) {
+      logger.error('Embeddings connection test failed', {
+        provider: this.name,
+        error: error.message
+      });
+      return false;
+    }
+  }
+
+  destroy() {}
+}
+
+module.exports = OllamaProvider;

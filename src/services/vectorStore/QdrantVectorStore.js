@@ -134,7 +134,7 @@ class QdrantVectorStore extends VectorStoreAdapter {
     const results = await this._scrollByFilter({ key: 'documentId', match: { value: documentId } }, 1);
     if (results.length === 0) return null;
     const payload = results[0].payload;
-    return { documentId, source: payload.source, tags: payload.tags };
+    return { documentId, source: payload.source, tags: payload.tags, hash: payload.hash };
   }
 
   async listDocuments(filters = {}) {
@@ -180,21 +180,40 @@ class QdrantVectorStore extends VectorStoreAdapter {
   }
 
   async _scrollByFilter(singleFilter, limit, fullFilter) {
-    const body = { limit: limit || 100, with_payload: true };
-    if (fullFilter) {
-      body.filter = fullFilter;
-    } else if (singleFilter) {
-      body.filter = { must: [singleFilter] };
+    const pageSize = Math.min(limit || 100, 100);
+    const filter = fullFilter
+      ? fullFilter
+      : singleFilter ? { must: [singleFilter] } : undefined;
+
+    let allPoints = [];
+    let offset = null;
+
+    while (true) {
+      const body = { limit: pageSize, with_payload: true };
+      if (filter) body.filter = filter;
+      if (offset !== null) body.offset = offset;
+
+      const res = await fetch(`${this.qdrantUrl}/collections/${this.collectionName}/points/scroll`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      if (!res.ok) return allPoints;
+      const data = await res.json();
+      const points = data.result?.points || [];
+      allPoints = allPoints.concat(points);
+
+      if (limit && allPoints.length >= limit) {
+        allPoints = allPoints.slice(0, limit);
+        break;
+      }
+
+      const nextOffset = data.result?.next_page_offset;
+      if (nextOffset == null) break;
+      offset = nextOffset;
     }
 
-    const res = await fetch(`${this.qdrantUrl}/collections/${this.collectionName}/points/scroll`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-    if (!res.ok) return [];
-    const data = await res.json();
-    return data.result?.points || [];
+    return allPoints;
   }
 
   async getStats() {
@@ -203,7 +222,15 @@ class QdrantVectorStore extends VectorStoreAdapter {
       if (!res.ok) return { documentCount: 0, chunkCount: 0 };
       const data = await res.json();
       const info = data.result;
+      const points = await this._scrollByFilter(null, 10000);
+      const documentIds = new Set(
+        points
+          .map((point) => point?.payload?.documentId)
+          .filter(Boolean)
+      );
+
       return {
+        documentCount: documentIds.size,
         chunkCount: info.points_count || 0,
         vectorDimension: info.config?.params?.vectors?.size || 0,
         status: info.status

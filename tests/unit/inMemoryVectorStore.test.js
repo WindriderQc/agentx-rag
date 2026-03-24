@@ -1,0 +1,151 @@
+const InMemoryVectorStore = require('../../src/services/vectorStore/InMemoryVectorStore');
+
+describe('InMemoryVectorStore', () => {
+  let store;
+
+  beforeEach(() => {
+    store = new InMemoryVectorStore();
+  });
+
+  test('upsert and list documents', async () => {
+    await store.upsertDocument('doc1', { source: 'test', tags: ['a'] }, [
+      { text: 'hello world', embedding: [1, 0, 0], chunkIndex: 0 }
+    ]);
+
+    const docs = await store.listDocuments();
+    expect(docs).toHaveLength(1);
+    expect(docs[0].documentId).toBe('doc1');
+    expect(docs[0].source).toBe('test');
+    expect(docs[0].chunkCount).toBe(1);
+  });
+
+  test('upsert replaces existing document', async () => {
+    await store.upsertDocument('doc1', { source: 'test' }, [
+      { text: 'v1', embedding: [1, 0, 0], chunkIndex: 0 }
+    ]);
+    const r = await store.upsertDocument('doc1', { source: 'test' }, [
+      { text: 'v2 chunk1', embedding: [1, 0, 0], chunkIndex: 0 },
+      { text: 'v2 chunk2', embedding: [0, 1, 0], chunkIndex: 1 }
+    ]);
+
+    expect(r.status).toBe('updated');
+    expect(r.chunkCount).toBe(2);
+
+    const docs = await store.listDocuments();
+    expect(docs).toHaveLength(1);
+    expect(docs[0].chunkCount).toBe(2);
+  });
+
+  test('search returns scored results', async () => {
+    await store.upsertDocument('doc1', { source: 'test' }, [
+      { text: 'relevant', embedding: [1, 0, 0], chunkIndex: 0 },
+      { text: 'less relevant', embedding: [0, 1, 0], chunkIndex: 1 }
+    ]);
+
+    const results = await store.searchSimilar([1, 0, 0], { topK: 2 });
+    expect(results).toHaveLength(2);
+    expect(results[0].score).toBeCloseTo(1.0);
+    expect(results[0].text).toBe('relevant');
+    expect(results[1].score).toBeCloseTo(0.0);
+  });
+
+  test('search respects minScore filter', async () => {
+    await store.upsertDocument('doc1', { source: 'test' }, [
+      { text: 'match', embedding: [1, 0, 0], chunkIndex: 0 },
+      { text: 'no match', embedding: [0, 1, 0], chunkIndex: 1 }
+    ]);
+
+    const results = await store.searchSimilar([1, 0, 0], { topK: 10, minScore: 0.5 });
+    expect(results).toHaveLength(1);
+    expect(results[0].text).toBe('match');
+  });
+
+  test('search respects source filter', async () => {
+    await store.upsertDocument('doc1', { source: 'alpha' }, [
+      { text: 'from alpha', embedding: [1, 0, 0], chunkIndex: 0 }
+    ]);
+    await store.upsertDocument('doc2', { source: 'beta' }, [
+      { text: 'from beta', embedding: [1, 0, 0], chunkIndex: 0 }
+    ]);
+
+    const results = await store.searchSimilar([1, 0, 0], { filters: { source: 'alpha' } });
+    expect(results).toHaveLength(1);
+    expect(results[0].text).toBe('from alpha');
+  });
+
+  test('delete removes document and vectors', async () => {
+    await store.upsertDocument('doc1', { source: 'test' }, [
+      { text: 'chunk', embedding: [1, 0, 0], chunkIndex: 0 }
+    ]);
+
+    const deleted = await store.deleteDocument('doc1');
+    expect(deleted).toBe(true);
+
+    const docs = await store.listDocuments();
+    expect(docs).toHaveLength(0);
+
+    const results = await store.searchSimilar([1, 0, 0]);
+    expect(results).toHaveLength(0);
+  });
+
+  test('delete non-existent document returns false', async () => {
+    const deleted = await store.deleteDocument('nope');
+    expect(deleted).toBe(false);
+  });
+
+  test('getDocument returns doc or null', async () => {
+    await store.upsertDocument('doc1', { source: 'test' }, [
+      { text: 'hi', embedding: [1, 0, 0], chunkIndex: 0 }
+    ]);
+
+    const doc = await store.getDocument('doc1');
+    expect(doc).not.toBeNull();
+    expect(doc.documentId).toBe('doc1');
+
+    const missing = await store.getDocument('nope');
+    expect(missing).toBeNull();
+  });
+
+  test('getDocumentChunks returns ordered chunks', async () => {
+    await store.upsertDocument('doc1', { source: 'test' }, [
+      { text: 'second', embedding: [0, 1, 0], chunkIndex: 1 },
+      { text: 'first', embedding: [1, 0, 0], chunkIndex: 0 }
+    ]);
+
+    const chunks = await store.getDocumentChunks('doc1');
+    expect(chunks).toHaveLength(2);
+    expect(chunks[0].text).toBe('first');
+    expect(chunks[1].text).toBe('second');
+  });
+
+  test('getStats returns counts and dimension', async () => {
+    await store.upsertDocument('doc1', { source: 'test' }, [
+      { text: 'a', embedding: [1, 0, 0], chunkIndex: 0 },
+      { text: 'b', embedding: [0, 1, 0], chunkIndex: 1 }
+    ]);
+
+    const stats = await store.getStats();
+    expect(stats.documentCount).toBe(1);
+    expect(stats.chunkCount).toBe(2);
+    expect(stats.vectorDimension).toBe(3);
+  });
+
+  test('healthCheck returns healthy', async () => {
+    const h = await store.healthCheck();
+    expect(h.healthy).toBe(true);
+    expect(h.type).toBe('memory');
+  });
+
+  test('list documents with tag filter', async () => {
+    await store.upsertDocument('doc1', { source: 'test', tags: ['api', 'docs'] }, [
+      { text: 'a', embedding: [1, 0, 0], chunkIndex: 0 }
+    ]);
+    await store.upsertDocument('doc2', { source: 'test', tags: ['code'] }, [
+      { text: 'b', embedding: [0, 1, 0], chunkIndex: 0 }
+    ]);
+
+    const filtered = await store.listDocuments({ tags: ['api'] });
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0].documentId).toBe('doc1');
+  });
+});

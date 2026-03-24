@@ -42,6 +42,10 @@ function splitIntoChunks(text, chunkSize, chunkOverlap) {
       chunks.push(chunk);
     }
 
+    if (end >= text.length) {
+      break;
+    }
+
     const minAdvance = Math.max(50, Math.floor(chunkSize * 0.1));
     const overlap = Math.min(chunkOverlap, chunkSize - minAdvance);
     const nextStart = end - overlap;
