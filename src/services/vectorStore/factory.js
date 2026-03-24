@@ -5,7 +5,13 @@
 const logger = require('../../../config/logger');
 
 function createVectorStore(config = {}) {
-  const type = config.type || process.env.VECTOR_STORE_TYPE || 'memory';
+  const type = config.type || process.env.VECTOR_STORE_TYPE;
+
+  if (!type) {
+    throw new Error(
+      'VECTOR_STORE_TYPE is not set. Set to "qdrant" for production or "memory" for development.'
+    );
+  }
 
   if (type === 'qdrant') {
     const QdrantVectorStore = require('./QdrantVectorStore');
