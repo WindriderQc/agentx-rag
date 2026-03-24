@@ -19,6 +19,8 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '10mb' }));
 
+app.get('/', (req, res) => res.redirect('/health'));
+
 app.get('/health', (req, res) => {
   const dbReady = require('mongoose').connection.readyState === 1;
   const status = dbReady ? 'ok' : 'degraded';
