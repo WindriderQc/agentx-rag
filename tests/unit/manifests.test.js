@@ -126,8 +126,8 @@ describe('GET /api/rag/deletion-preview', () => {
     RagManifest.findOne.mockReturnValue({ sort: () => sortMock });
 
     mockVectorStore.listDocuments.mockResolvedValue([
-      { documentId: 'doc1', source: 'file1.txt', chunkCount: 3 },
-      { documentId: 'doc2', source: 'file3.txt', chunkCount: 2 }  // stale — not in manifest
+      { documentId: 'file1.txt', source: 'test-source', chunkCount: 3 },
+      { documentId: 'file3.txt', source: 'test-source', chunkCount: 2 }  // stale — not in manifest
     ]);
 
     const app = buildApp();
@@ -138,7 +138,7 @@ describe('GET /api/rag/deletion-preview', () => {
     expect(res.body.data.manifestFiles).toBe(2);
     expect(res.body.data.indexedDocs).toBe(2);
     expect(res.body.data.stale).toHaveLength(1);
-    expect(res.body.data.stale[0].documentId).toBe('doc2');
+    expect(res.body.data.stale[0].documentId).toBe('file3.txt');
     expect(res.body.data.fresh).toBe(1);
   });
 
@@ -157,8 +157,8 @@ describe('POST /api/rag/cleanup', () => {
     RagManifest.findOne.mockReturnValue({ sort: () => sortMock });
 
     mockVectorStore.listDocuments.mockResolvedValue([
-      { documentId: 'doc1', source: 'file1.txt', chunkCount: 3 },
-      { documentId: 'doc-stale', source: 'gone.txt', chunkCount: 1 }
+      { documentId: 'file1.txt', source: 'test-source', chunkCount: 3 },
+      { documentId: 'gone.txt', source: 'test-source', chunkCount: 1 }
     ]);
     mockVectorStore.deleteDocument.mockResolvedValue(true);
   };
@@ -188,7 +188,7 @@ describe('POST /api/rag/cleanup', () => {
     expect(res.status).toBe(200);
     expect(res.body.data.dryRun).toBe(false);
     expect(res.body.data.deleted).toBe(1);
-    expect(mockVectorStore.deleteDocument).toHaveBeenCalledWith('doc-stale');
+    expect(mockVectorStore.deleteDocument).toHaveBeenCalledWith('gone.txt');
   });
 
   it('defaults to dry-run when dryRun not specified', async () => {
