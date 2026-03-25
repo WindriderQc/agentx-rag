@@ -71,7 +71,11 @@ class RagStore {
   async getStats() {
     const storeStats = await this.vectorStore.getStats();
     const health = await this.vectorStore.healthCheck();
-    return { ...storeStats, vectorStore: health };
+    return {
+      ...storeStats,
+      embeddingModel: this.embeddingsService.model,
+      vectorStore: health,
+    };
   }
 }
 
