@@ -5,7 +5,6 @@ const { execFile } = require('child_process');
 
 const mammoth = require('mammoth');
 const mongoose = require('mongoose');
-const fetch = require('node-fetch');
 
 const logger = require('../../config/logger');
 const { getRagStore } = require('./ragStore');
@@ -145,6 +144,8 @@ function needsReindex(record) {
   if (Number.isNaN(indexedAt.getTime())) {
     return true;
   }
+  // If mtime is missing/unparseable, treat as unchanged — avoids re-ingesting
+  // files whose mtime was lost while content hasn't actually changed.
   const mtimeMs = normalizeMtimeMs(record.mtime);
   return mtimeMs === null ? false : mtimeMs > indexedAt.getTime();
 }
@@ -274,7 +275,7 @@ function getPdfParser() {
 }
 
 function createIngestApiClient(options = {}) {
-  const fetchImpl = options.fetchImpl || fetch;
+  const fetchImpl = options.fetchImpl || require('node-fetch');
   const baseUrl = String(options.baseUrl || process.env.RAG_API_URL || `http://127.0.0.1:${process.env.PORT || 3082}`)
     .replace(/\/+$/, '');
   const ingestPath = options.ingestPath || '/api/rag/ingest';
@@ -327,7 +328,10 @@ class IngestWorker {
 
   async getCandidateRecords(options = {}) {
     const limit = Number(options.limit || 0);
-    const query = { ext: { $in: Array.from(SUPPORTED_EXTENSIONS) } };
+    const query = {
+      ext: { $in: Array.from(SUPPORTED_EXTENSIONS) },
+      size: { $lte: this.maxFileSizeBytes }
+    };
 
     if (this.roots.length) {
       query.$or = this.roots.map((root) => ({
@@ -335,19 +339,25 @@ class IngestWorker {
       }));
     }
 
-    const records = await this.collection
+    const cursor = this.collection
       .find(query)
-      .sort({ scan_seen_at: -1, path: 1 })
-      .toArray();
+      .sort({ scan_seen_at: -1, path: 1 });
 
-    const eligible = records.filter((record) => {
+    const cap = limit > 0 ? limit : 5000;
+    const eligible = [];
+
+    for await (const record of cursor) {
+      if (eligible.length >= cap) break;
       if (describeSkip(record, { roots: this.roots, maxFileSizeBytes: this.maxFileSizeBytes }).skip) {
-        return false;
+        continue;
       }
-      return needsReindex(record);
-    });
+      if (needsReindex(record)) {
+        eligible.push(record);
+      }
+    }
 
-    return limit > 0 ? eligible.slice(0, limit) : eligible;
+    await cursor.close();
+    return eligible;
   }
 
   async processRecord(record) {
@@ -508,6 +518,7 @@ module.exports = {
   getMatchingRoot,
   getPdfParser,
   hasSkippedDirectory,
+  isPathUnderRoot,
   needsReindex,
   normalizeExt,
   normalizeMtimeMs,

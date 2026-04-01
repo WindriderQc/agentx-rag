@@ -60,6 +60,25 @@ describe('ingestWorker utilities', () => {
   });
 });
 
+function mockCursor(records) {
+  let index = 0;
+  const cursor = {
+    sort: jest.fn().mockReturnThis(),
+    close: jest.fn().mockResolvedValue(undefined),
+    [Symbol.asyncIterator]() {
+      return {
+        next() {
+          if (index < records.length) {
+            return Promise.resolve({ value: records[index++], done: false });
+          }
+          return Promise.resolve({ value: undefined, done: true });
+        }
+      };
+    }
+  };
+  return cursor;
+}
+
 describe('IngestWorker', () => {
   let collection;
   let db;
@@ -86,11 +105,7 @@ describe('IngestWorker', () => {
       mtime: 1710000000
     };
 
-    collection.find.mockReturnValue({
-      sort: jest.fn().mockReturnValue({
-        toArray: jest.fn().mockResolvedValue([record])
-      })
-    });
+    collection.find.mockReturnValue(mockCursor([record]));
     fs.readFile.mockResolvedValue('# Quarterly update');
 
     const ingestDocument = jest.fn().mockResolvedValue({
@@ -141,11 +156,7 @@ describe('IngestWorker', () => {
       indexed_at: '2024-03-09T15:00:00.000Z'
     };
 
-    collection.find.mockReturnValue({
-      sort: jest.fn().mockReturnValue({
-        toArray: jest.fn().mockResolvedValue([record])
-      })
-    });
+    collection.find.mockReturnValue(mockCursor([record]));
     fs.readFile.mockResolvedValue('Updated guide content');
 
     const worker = new IngestWorker({

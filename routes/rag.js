@@ -3,6 +3,7 @@
  *
  * POST   /ingest          — Ingest a document (text + metadata)
  * POST   /documents       — Alias for /ingest
+ * POST   /ingest-scan     — Trigger NAS file scan + ingestion
  * POST   /search          — Search similar chunks
  * GET    /documents       — List ingested documents
  * DELETE /documents/:id   — Delete a document by ID
@@ -14,7 +15,7 @@ const mongoose = require('mongoose');
 const router = express.Router();
 const logger = require('../config/logger');
 const { getRagStore } = require('../src/services/ragStore');
-const { runIngestScan } = require('../src/services/ingestWorker');
+const { runIngestScan, getConfiguredRoots, isPathUnderRoot } = require('../src/services/ingestWorker');
 
 // ── Helpers ──────────────────────────────────────────────
 
@@ -81,12 +82,26 @@ router.post('/ingest-scan', async (req, res) => {
     }
 
     const { limit, roots } = req.body || {};
+    const allowedRoots = getConfiguredRoots();
+
+    if (Array.isArray(roots)) {
+      const invalid = roots.filter((r) => !allowedRoots.some((allowed) => isPathUnderRoot(r, allowed)));
+      if (invalid.length) {
+        return res.status(400).json({
+          ok: false,
+          error: 'INVALID_ROOTS',
+          detail: `Roots not under configured paths: ${invalid.join(', ')}`
+        });
+      }
+    }
+
     const summary = await runIngestScan({
-      limit: Number(limit || 0) || undefined,
+      limit: Math.min(Number(limit || 0) || 5000, 5000) || undefined,
       roots: Array.isArray(roots) ? roots : undefined
     });
 
-    res.json({ ok: true, data: summary });
+    const { results, ...counts } = summary;
+    res.json({ ok: true, data: counts });
   } catch (err) {
     logger.error('Ingest scan error:', err);
     res.status(500).json({ ok: false, error: 'Ingest scan failed', detail: err.message });
