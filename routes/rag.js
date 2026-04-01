@@ -10,9 +10,11 @@
  */
 
 const express = require('express');
+const mongoose = require('mongoose');
 const router = express.Router();
 const logger = require('../config/logger');
 const { getRagStore } = require('../src/services/ragStore');
+const { runIngestScan } = require('../src/services/ingestWorker');
 
 // ── Helpers ──────────────────────────────────────────────
 
@@ -65,6 +67,31 @@ async function handleIngest(req, res) {
 
 router.post('/ingest', handleIngest);
 router.post('/documents', handleIngest);
+
+// ── POST /ingest-scan ───────────────────────────────────
+
+router.post('/ingest-scan', async (req, res) => {
+  try {
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({
+        ok: false,
+        error: 'MONGODB_UNAVAILABLE',
+        detail: 'MongoDB must be connected before running ingest scan'
+      });
+    }
+
+    const { limit, roots } = req.body || {};
+    const summary = await runIngestScan({
+      limit: Number(limit || 0) || undefined,
+      roots: Array.isArray(roots) ? roots : undefined
+    });
+
+    res.json({ ok: true, data: summary });
+  } catch (err) {
+    logger.error('Ingest scan error:', err);
+    res.status(500).json({ ok: false, error: 'Ingest scan failed', detail: err.message });
+  }
+});
 
 // ── POST /search ─────────────────────────────────────────
 
