@@ -2,7 +2,8 @@
  * Re-ranker — LLM judge scores relevance of search results.
  *
  * Ported from legacy AgentX ragStore.rerankResults().
- * Model: llama3.1:8b (env: RERANK_MODEL), parallel scoring via Ollama /api/generate.
+ * Routed via Core task type `rag_reranking`, so RAG does not own model
+ * selection or host placement.
  * Normalizes LLM scores to 0-1, falls back to original vector score on error.
  */
 
@@ -70,8 +71,6 @@ async function rerankResults(query, results, topK = 5) {
   }
 
   try {
-    const model = process.env.RERANK_MODEL || 'llama3.1:8b';
-
     // Score each result in parallel
     const scoringPromises = results.map(async (result, idx) => {
       const prompt = buildScoringPrompt(query, result.text || '');
@@ -81,7 +80,7 @@ async function rerankResults(query, results, topK = 5) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            model,
+            taskType: 'rag_reranking',
             prompt,
             stream: false,
             callerDetail: 'rag-reranker',

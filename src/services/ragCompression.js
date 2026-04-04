@@ -4,7 +4,8 @@
  * Uses a small LLM to extract only the relevant sentences from retrieved chunks,
  * reducing token count before context injection. Ported from legacy AgentX monolith.
  *
- * Model: gemma2:2b (env: COMPRESSION_MODEL)
+ * Routed via Core task type `rag_compression`, so RAG does not own model
+ * selection or host placement.
  * Features: LRU cache with TTL, compression-ratio metrics, graceful fallback.
  */
 
@@ -19,7 +20,6 @@ const COMPRESSION_TIMEOUT = Number(process.env.COMPRESSION_TIMEOUT_MS) || 15000;
 
 class RAGCompressionService {
   constructor() {
-    this.compressionModel = process.env.COMPRESSION_MODEL || 'gemma2:2b';
     this.compressionCache = new Map();
     this.cacheTTL = parseInt(process.env.COMPRESSION_CACHE_TTL, 10) || 3600000; // 1 hour
   }
@@ -34,7 +34,6 @@ class RAGCompressionService {
    */
   async compressChunks(query, chunks, options = {}) {
     const {
-      compressionModel = this.compressionModel,
       minRelevanceScore = 0.6,
       maxSentencesPerChunk = 5,
       useCache = true
@@ -66,7 +65,7 @@ class RAGCompressionService {
       }
 
       const compressed = await this._compressChunk(
-        query, chunk, compressionModel, minRelevanceScore, maxSentencesPerChunk
+        query, chunk, minRelevanceScore, maxSentencesPerChunk
       );
 
       if (useCache) {
@@ -123,7 +122,7 @@ class RAGCompressionService {
    * Compress a single chunk via LLM sentence extraction.
    * @private
    */
-  async _compressChunk(query, chunk, model, minScore, maxSentences) {
+  async _compressChunk(query, chunk, minScore, maxSentences) {
     const systemPrompt = `You are a sentence extraction assistant. Your task is to extract ONLY the sentences from the given text that are directly relevant to answering the user's query.
 
 Rules:
@@ -150,7 +149,7 @@ Extract the most relevant sentences:`;
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model,
+          taskType: 'rag_compression',
           prompt: userPrompt,
           system: systemPrompt,
           stream: false,

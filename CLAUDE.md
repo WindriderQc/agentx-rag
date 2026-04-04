@@ -58,9 +58,9 @@ All responses use the envelope: `{ ok: true/false, data?: ..., error?: "message"
 }
 ```
 
-When `rerank: true`, the service fetches `topK * 3` candidates, scores each via LLM judge (Ollama `RERANK_MODEL`, default `llama3.1:8b`), and returns the top `topK` sorted by judge score. Falls back to vector scores if the LLM is unavailable.
+When `rerank: true`, the service fetches `topK * 3` candidates, scores each via the core inference proxy task `rag_reranking`, and returns the top `topK` sorted by judge score. Falls back to vector scores if the LLM is unavailable.
 
-When `compress: true`, after retrieval (and optional re-ranking), each result chunk is passed through a small LLM (`COMPRESSION_MODEL`, default `gemma2:2b`) that extracts only the sentences relevant to the query. Results include `compressedText`, `originalText`, `wasCompressed`, and `compressionRatio` fields. Results with no relevant content are filtered out entirely. An LRU cache (1-hour TTL) prevents redundant LLM calls. Falls back to original text if the LLM is unavailable.
+When `compress: true`, after retrieval (and optional re-ranking), each result chunk is passed through the core inference proxy task `rag_compression`, which extracts only the sentences relevant to the query. Results include `compressedText`, `originalText`, `wasCompressed`, and `compressionRatio` fields. Results with no relevant content are filtered out entirely. An LRU cache (1-hour TTL) prevents redundant LLM calls. Falls back to original text if the LLM is unavailable.
 
 ### Documents
 
@@ -166,10 +166,7 @@ EMBEDDING_DIMENSION=768
 OLLAMA_HOSTS=192.168.2.99:11434,192.168.2.66:11434
 CORE_PROXY_URL=http://localhost:3080
 CORS_ORIGINS=http://localhost:3080,http://localhost:3082
-QUERY_EXPANSION_MODEL=gemma2:2b       # LLM for query expansion
-RERANK_MODEL=llama3.1:8b              # LLM judge for re-ranking
 RERANK_TIMEOUT_MS=15000               # Per-result scoring timeout
-COMPRESSION_MODEL=gemma2:2b           # LLM for contextual compression
 COMPRESSION_TIMEOUT_MS=15000          # Per-chunk compression timeout
 COMPRESSION_CACHE_TTL=3600000         # Compression cache TTL (ms, default 1hr)
 ```

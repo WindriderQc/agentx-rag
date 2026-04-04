@@ -2,7 +2,8 @@
  * Query Expansion — uses a small LLM to generate related search queries.
  *
  * Ported from legacy AgentX ragStore.expandQuery().
- * Model: gemma2:2b (env: QUERY_EXPANSION_MODEL), fast enough for inline use.
+ * Routed via Core task type `rag_query_expansion`, so RAG does not own model
+ * selection or host placement.
  */
 
 const fetchWithTimeout = require('../utils/fetchWithTimeout');
@@ -20,8 +21,6 @@ const MAX_EXPANSIONS = 3;
  */
 async function expandQuery(query) {
   try {
-    const model = process.env.QUERY_EXPANSION_MODEL || 'gemma2:2b';
-
     const prompt = `Given this search query: "${query}"
 
 Generate 2-3 related search queries that would help find relevant information. Focus on:
@@ -36,7 +35,7 @@ Return ONLY the queries, one per line, without numbering or explanation.`;
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model,
+        taskType: 'rag_query_expansion',
         prompt,
         stream: false,
         callerDetail: 'rag-query-expansion',

@@ -17,7 +17,6 @@ describe('ragCompression', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     resetCompressionService();
-    delete process.env.COMPRESSION_MODEL;
     delete process.env.OLLAMA_HOSTS;
     delete process.env.OLLAMA_HOST;
     delete process.env.COMPRESSION_CACHE_TTL;
@@ -62,13 +61,13 @@ describe('ragCompression', () => {
 
       // Verify Ollama API call
       expect(fetchWithTimeout).toHaveBeenCalledWith(
-        expect.stringContaining('/api/generate'),
+        expect.stringContaining('/api/inference/generate'),
         expect.objectContaining({ method: 'POST' }),
         expect.any(Number)
       );
 
       const callBody = JSON.parse(fetchWithTimeout.mock.calls[0][1].body);
-      expect(callBody).toHaveProperty('model');
+      expect(callBody).toHaveProperty('taskType', 'rag_compression');
       expect(callBody).toHaveProperty('prompt');
       expect(callBody).toHaveProperty('system');
       expect(callBody.options.temperature).toBe(0.1);
@@ -178,11 +177,7 @@ describe('ragCompression', () => {
       expect(fetchWithTimeout).toHaveBeenCalledTimes(2);
     });
 
-    it('should use COMPRESSION_MODEL env var', async () => {
-      resetCompressionService();
-      process.env.COMPRESSION_MODEL = 'custom-model:latest';
-      service = getCompressionService();
-
+    it('should route compression through the core task router', async () => {
       fetchWithTimeout.mockResolvedValue({
         ok: true,
         json: () => Promise.resolve({ response: 'Compressed.' })
@@ -191,19 +186,8 @@ describe('ragCompression', () => {
       await service.compressChunks('test', [{ _id: '1', text: 'hello world test.' }]);
 
       const callBody = JSON.parse(fetchWithTimeout.mock.calls[0][1].body);
-      expect(callBody.model).toBe('custom-model:latest');
-    });
-
-    it('should default to gemma2:2b model', async () => {
-      fetchWithTimeout.mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({ response: 'Compressed.' })
-      });
-
-      await service.compressChunks('test', [{ _id: '1', text: 'hello world test.' }]);
-
-      const callBody = JSON.parse(fetchWithTimeout.mock.calls[0][1].body);
-      expect(callBody.model).toBe('gemma2:2b');
+      expect(callBody.taskType).toBe('rag_compression');
+      expect(callBody.model).toBeUndefined();
     });
 
     it('should compress all chunks in parallel', async () => {

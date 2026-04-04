@@ -16,7 +16,6 @@ const logger = require('../../config/logger');
 describe('queryExpansion', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    delete process.env.QUERY_EXPANSION_MODEL;
     delete process.env.OLLAMA_HOSTS;
     delete process.env.OLLAMA_HOST;
   });
@@ -33,39 +32,17 @@ describe('queryExpansion', () => {
       const queries = await expandQuery('python iteration');
       expect(queries).toEqual(['python list comprehension', 'python loops']);
       expect(fetchWithTimeout).toHaveBeenCalledWith(
-        expect.stringContaining('/api/generate'),
+        expect.stringContaining('/api/inference/generate'),
         expect.objectContaining({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' }
         }),
         expect.any(Number)
       );
-    });
-
-    it('should use QUERY_EXPANSION_MODEL env var', async () => {
-      process.env.QUERY_EXPANSION_MODEL = 'llama3:8b';
-
-      fetchWithTimeout.mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({ response: 'test query\n' })
-      });
-
-      await expandQuery('test');
 
       const callBody = JSON.parse(fetchWithTimeout.mock.calls[0][1].body);
-      expect(callBody.model).toBe('llama3:8b');
-    });
-
-    it('should default to gemma2:2b model', async () => {
-      fetchWithTimeout.mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({ response: 'test query\n' })
-      });
-
-      await expandQuery('test');
-
-      const callBody = JSON.parse(fetchWithTimeout.mock.calls[0][1].body);
-      expect(callBody.model).toBe('gemma2:2b');
+      expect(callBody.taskType).toBe('rag_query_expansion');
+      expect(callBody.model).toBeUndefined();
     });
 
     it('should handle API failure gracefully', async () => {

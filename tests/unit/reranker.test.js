@@ -16,7 +16,6 @@ const logger = require('../../config/logger');
 describe('reranker', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    delete process.env.RERANK_MODEL;
     delete process.env.OLLAMA_HOSTS;
     delete process.env.OLLAMA_HOST;
   });
@@ -126,9 +125,7 @@ describe('reranker', () => {
       // The one that failed falls back to its original score (0.9 or 0.5)
     });
 
-    it('should use RERANK_MODEL env var', async () => {
-      process.env.RERANK_MODEL = 'custom-judge:latest';
-
+    it('should route reranking through the core task router', async () => {
       fetchWithTimeout.mockResolvedValue({
         ok: true,
         json: () => Promise.resolve({ response: '5' })
@@ -137,19 +134,8 @@ describe('reranker', () => {
       await rerankResults('test', [{ text: 'hello', score: 0.5 }], 1);
 
       const callBody = JSON.parse(fetchWithTimeout.mock.calls[0][1].body);
-      expect(callBody.model).toBe('custom-judge:latest');
-    });
-
-    it('should default to llama3.1:8b model', async () => {
-      fetchWithTimeout.mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({ response: '5' })
-      });
-
-      await rerankResults('test', [{ text: 'hello', score: 0.5 }], 1);
-
-      const callBody = JSON.parse(fetchWithTimeout.mock.calls[0][1].body);
-      expect(callBody.model).toBe('llama3.1:8b');
+      expect(callBody.taskType).toBe('rag_reranking');
+      expect(callBody.model).toBeUndefined();
     });
 
     it('should score all results in parallel', async () => {
