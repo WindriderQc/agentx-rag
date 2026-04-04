@@ -16,6 +16,19 @@ function hashText(text) {
 }
 
 function splitIntoChunks(text, chunkSize, chunkOverlap) {
+  if (typeof text !== 'string') {
+    throw new Error('splitIntoChunks: text must be a string');
+  }
+  if (chunkSize <= 0 || !Number.isFinite(chunkSize)) {
+    throw new Error(`splitIntoChunks: chunkSize must be a positive number, got ${chunkSize}`);
+  }
+  if (chunkOverlap < 0 || !Number.isFinite(chunkOverlap)) {
+    throw new Error(`splitIntoChunks: chunkOverlap must be a non-negative number, got ${chunkOverlap}`);
+  }
+  if (chunkOverlap >= chunkSize) {
+    throw new Error(`splitIntoChunks: chunkOverlap (${chunkOverlap}) must be less than chunkSize (${chunkSize})`);
+  }
+
   const chunks = [];
   let start = 0;
   const MAX_CHUNKS = 10000;
@@ -66,4 +79,51 @@ function splitIntoChunks(text, chunkSize, chunkOverlap) {
   return chunks;
 }
 
-module.exports = { generateDocumentId, hashText, splitIntoChunks };
+/**
+ * Reciprocal Rank Fusion (RRF) — merges two ranked result lists.
+ *
+ * Items appearing in both lists receive boosted scores (sum of reciprocal ranks).
+ * Formula per list: 1 / (k + rank + 1)
+ *
+ * Ported from legacy AgentX ragStore._reciprocalRankFusion().
+ *
+ * @param {Array} list1 - First ranked list (e.g. vector search results)
+ * @param {Array} list2 - Second ranked list (e.g. keyword search results)
+ * @param {number} k - RRF constant (default: 60)
+ * @returns {Array} Merged list sorted by fused score, each item gets an `rrfScore` field
+ */
+function reciprocalRankFusion(list1, list2, k = 60) {
+  const scoreMap = new Map();
+
+  // Score list1
+  list1.forEach((item, rank) => {
+    const meta = item.metadata || {};
+    const key = `${meta.documentId || ''}:${meta.chunkIndex ?? ''}`;
+    const rrfScore = 1 / (k + rank + 1);
+    scoreMap.set(key, { item, score: rrfScore });
+  });
+
+  // Add/update with list2
+  list2.forEach((item, rank) => {
+    const meta = item.metadata || {};
+    const key = `${meta.documentId || ''}:${meta.chunkIndex ?? ''}`;
+    const rrfScore = 1 / (k + rank + 1);
+
+    if (scoreMap.has(key)) {
+      // Item in both lists — add scores (boost)
+      const existing = scoreMap.get(key);
+      existing.score += rrfScore;
+    } else {
+      scoreMap.set(key, { item, score: rrfScore });
+    }
+  });
+
+  return Array.from(scoreMap.values())
+    .sort((a, b) => b.score - a.score)
+    .map(entry => ({
+      ...entry.item,
+      rrfScore: entry.score
+    }));
+}
+
+module.exports = { generateDocumentId, hashText, splitIntoChunks, reciprocalRankFusion };

@@ -447,6 +447,9 @@ class IngestWorker {
 
   async run(options = {}) {
     const startedAt = new Date();
+    const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
+    const isCancelled = typeof options.isCancelled === 'function' ? options.isCancelled : null;
+
     const candidates = await this.getCandidateRecords(options);
     const results = [];
     const summary = {
@@ -463,7 +466,17 @@ class IngestWorker {
       results
     };
 
+    // Report initial total so callers can show progress bars
+    if (onProgress) {
+      onProgress({ processed: 0, total: candidates.length, errors: 0 });
+    }
+
     for (const [index, record] of candidates.entries()) {
+      if (isCancelled && isCancelled()) {
+        this.logger.info('RAG ingest worker cancelled', { processed: summary.processed });
+        break;
+      }
+
       const result = await this.processRecord(record);
       results.push(result);
       summary.processed += 1;
@@ -473,6 +486,14 @@ class IngestWorker {
       else if (result.status === 'unchanged') summary.unchanged += 1;
       else if (result.status === 'failed') summary.failed += 1;
       else summary.skipped += 1;
+
+      if (onProgress) {
+        onProgress({
+          processed: summary.processed,
+          total: candidates.length,
+          errors: summary.failed
+        });
+      }
 
       if (index < candidates.length - 1 && this.batchDelayMs > 0) {
         await sleep(this.batchDelayMs);

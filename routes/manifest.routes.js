@@ -12,6 +12,10 @@ const router = express.Router();
 const logger = require('../config/logger');
 const RagManifest = require('../models/RagManifest');
 const { getRagStore } = require('../src/services/ragStore');
+const { sendError } = require('../src/utils/response');
+
+const MAX_DELETES_DEFAULT = 100;
+const MAX_DELETES_HARD_CAP = 500;
 
 // ── POST /manifests ──────────────────────────────────────
 
@@ -46,7 +50,7 @@ router.post('/manifests', async (req, res) => {
     });
   } catch (err) {
     logger.error('Create manifest error:', err);
-    res.status(500).json({ ok: false, error: 'Failed to create manifest', detail: err.message });
+    sendError(res, 500, 'Failed to create manifest', err.message);
   }
 });
 
@@ -61,18 +65,20 @@ router.get('/manifests/latest', async (req, res) => {
     res.json({ ok: true, data: manifest || null });
   } catch (err) {
     logger.error('Get latest manifest error:', err);
-    res.status(500).json({ ok: false, error: 'Failed to get manifest', detail: err.message });
+    sendError(res, 500, 'Failed to get manifest', err.message);
   }
 });
 
-// ── GET /deletion-preview ────────────────────────────────
+// ── Shared helper ────────────────────────────────────────
 
-async function computeStaleDocs(source) {
-  const manifest = await RagManifest.findOne({ source }).sort({ generatedAt: -1 }).lean();
+async function computeStaleDocs(source, manifestId = null) {
+  const manifest = manifestId
+    ? await RagManifest.findById(manifestId).lean()
+    : await RagManifest.findOne({ source }).sort({ generatedAt: -1 }).lean();
   if (!manifest) return { manifest: null };
 
   const ragStore = getRagStore();
-  const indexedDocs = await ragStore.listDocuments({ source });
+  const { documents: indexedDocs } = await ragStore.listDocuments({ source });
 
   const manifestPaths = new Set(manifest.files.map(f => f.path));
   const stale = indexedDocs.filter(doc => !manifestPaths.has(doc.documentId));
@@ -81,13 +87,40 @@ async function computeStaleDocs(source) {
   return { manifest, indexedDocs, stale, fresh };
 }
 
+// ── GET /deletion-preview ────────────────────────────────
+
 router.get('/deletion-preview', async (req, res) => {
   try {
     const { source } = req.query;
+
+    // Multi-source aggregate when source is omitted
     if (!source) {
-      return res.status(400).json({ ok: false, error: 'source query parameter is required' });
+      const manifests = await RagManifest.find().lean();
+      const ragStore = getRagStore();
+
+      const sources = [];
+      let totalStale = 0;
+
+      for (const manifest of manifests) {
+        const { documents: indexedDocs } = await ragStore.listDocuments({ source: manifest.source });
+        const manifestPaths = new Set(manifest.files.map(f => f.path));
+        const staleCount = indexedDocs.filter(doc => !manifestPaths.has(doc.documentId)).length;
+        const freshCount = indexedDocs.length - staleCount;
+
+        sources.push({
+          source: manifest.source,
+          manifestFiles: manifest.files.length,
+          indexedDocs: indexedDocs.length,
+          staleCount,
+          freshCount
+        });
+        totalStale += staleCount;
+      }
+
+      return res.json({ ok: true, data: { sources, totalStale } });
     }
 
+    // Single-source preview (existing behavior)
     const { manifest, indexedDocs, stale, fresh } = await computeStaleDocs(source);
     if (!manifest) {
       return res.json({ ok: true, data: { source, manifestFiles: 0, indexedDocs: 0, stale: [], fresh: 0 } });
@@ -105,7 +138,7 @@ router.get('/deletion-preview', async (req, res) => {
     });
   } catch (err) {
     logger.error('Deletion preview error:', err);
-    res.status(500).json({ ok: false, error: 'Failed to compute deletion preview', detail: err.message });
+    sendError(res, 500, 'Failed to compute deletion preview', err.message);
   }
 });
 
@@ -113,29 +146,97 @@ router.get('/deletion-preview', async (req, res) => {
 
 router.post('/cleanup', async (req, res) => {
   try {
-    const { source, dryRun = true } = req.body;
+    const { source, dryRun = true, manifestId = null } = req.body;
+    const maxDeletes = Math.min(
+      Math.max(Number(req.body.maxDeletes) || MAX_DELETES_DEFAULT, 1),
+      MAX_DELETES_HARD_CAP
+    );
+
     if (!source) {
       return res.status(400).json({ ok: false, error: 'source is required' });
     }
 
-    const { manifest, stale } = await computeStaleDocs(source);
+    const startTime = Date.now();
+    const { manifest, stale } = await computeStaleDocs(source, manifestId);
+
     if (!manifest) {
-      return res.json({ ok: true, data: { dryRun, deleted: 0, documents: [] } });
+      if (manifestId) {
+        return res.status(404).json({ ok: false, error: `Manifest "${manifestId}" not found` });
+      }
+      return res.json({ ok: true, data: { dryRun, deleted: [], errors: [], stats: { attempted: 0, succeeded: 0, failed: 0 } } });
+    }
+
+    if (!stale || stale.length === 0) {
+      return res.json({
+        ok: true,
+        data: {
+          dryRun,
+          manifestId: manifest._id,
+          manifestGeneratedAt: manifest.generatedAt,
+          deleted: [],
+          errors: [],
+          stats: { attempted: 0, succeeded: 0, failed: 0 }
+        }
+      });
     }
 
     if (dryRun) {
-      return res.json({ ok: true, data: { dryRun: true, deleted: stale.length, documents: stale } });
+      return res.json({
+        ok: true,
+        data: {
+          dryRun: true,
+          manifestId: manifest._id,
+          manifestGeneratedAt: manifest.generatedAt,
+          staleCount: stale.length,
+          documents: stale,
+          stats: { attempted: 0, succeeded: 0, failed: 0 }
+        }
+      });
     }
 
+    // Safety cap — prevent accidental mass deletion in non-dryRun mode
+    if (stale.length > maxDeletes) {
+      return res.status(400).json({
+        ok: false,
+        error: `Stale count (${stale.length}) exceeds maxDeletes (${maxDeletes}). Increase maxDeletes or run in batches.`
+      });
+    }
+
+    // Per-document deletion with error handling
     const ragStore = getRagStore();
+    const deleted = [];
+    const errors = [];
+
     for (const doc of stale) {
-      await ragStore.deleteDocument(doc.documentId);
+      try {
+        await ragStore.deleteDocument(doc.documentId);
+        deleted.push(doc.documentId);
+      } catch (err) {
+        errors.push({ documentId: doc.documentId, error: err.message });
+      }
     }
 
-    res.json({ ok: true, data: { dryRun: false, deleted: stale.length, documents: stale } });
+    const elapsed = Date.now() - startTime;
+
+    res.json({
+      ok: true,
+      data: {
+        dryRun: false,
+        manifestId: manifest._id,
+        manifestGeneratedAt: manifest.generatedAt,
+        deleted,
+        errors,
+        stats: {
+          attempted: stale.length,
+          succeeded: deleted.length,
+          failed: errors.length,
+          elapsedMs: elapsed
+        }
+      }
+    });
   } catch (err) {
     logger.error('Cleanup error:', err);
-    res.status(500).json({ ok: false, error: 'Cleanup failed', detail: err.message });
+    sendError(res, 500, 'Cleanup failed', err.message);
   }
 });
 

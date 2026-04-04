@@ -1,6 +1,7 @@
 const logger = require('../../config/logger');
 const CoreProxyProvider = require('./embeddings/coreProxyProvider');
 const OllamaProvider = require('./embeddings/ollamaProvider');
+const { getEmbeddingCache } = require('./embeddingCache');
 
 function createEmbeddingsProvider(config = {}) {
   const providerName = (config.embeddingProvider || process.env.EMBEDDING_PROVIDER || 'ollama-direct')
@@ -23,53 +24,141 @@ class EmbeddingsService {
     this.providerName = this.provider.name;
     this.model = this.provider.model;
     this.dimension = this.provider.getDimension();
+    this.healthCheckTtlMs = Number(
+      config.healthCheckTtlMs || process.env.EMBEDDING_HEALTH_TTL_MS || 300000
+    );
+    this._connectionStatus = null;
+    this._connectionStatusPromise = null;
+
+    this.refreshConnectionStatus().catch((error) => {
+      logger.warn('Initial embedding health check failed', {
+        provider: this.providerName,
+        error: error.message
+      });
+    });
+  }
+
+  getCachedConnectionStatus() {
+    if (!this._connectionStatus) {
+      return null;
+    }
+
+    return {
+      healthy: this._connectionStatus.healthy,
+      checkedAt: this._connectionStatus.checkedAt,
+      stale: Date.now() - this._connectionStatus.checkedAt >= this.healthCheckTtlMs
+    };
+  }
+
+  async refreshConnectionStatus() {
+    if (this._connectionStatusPromise) {
+      return this._connectionStatusPromise;
+    }
+
+    const runCheck = (async () => {
+      let healthy = false;
+
+      try {
+        healthy = await this.provider.testConnection();
+      } catch (error) {
+        logger.error('Embeddings connection test failed', {
+          provider: this.providerName,
+          error: error.message
+        });
+      }
+
+      this._connectionStatus = {
+        healthy: healthy === true,
+        checkedAt: Date.now()
+      };
+
+      return this._connectionStatus.healthy;
+    })();
+
+    this._connectionStatusPromise = runCheck.finally(() => {
+      this._connectionStatusPromise = null;
+    });
+
+    return this._connectionStatusPromise;
   }
 
   async embed(text, preferredHost = null) {
-    return this.provider.embed(text, preferredHost);
+    const cache = getEmbeddingCache();
+    const cached = cache.get(text, this.model);
+    if (cached) return cached;
+
+    const embedding = await this.provider.embed(text, preferredHost);
+    cache.set(text, this.model, embedding);
+    return embedding;
   }
 
   async embedBatch(texts, preferredHost = null) {
-    return this.provider.embedBatch(texts, preferredHost);
-  }
+    const cache = getEmbeddingCache();
+    const results = new Array(texts.length);
+    const uncachedIndices = [];
+    const uncachedTexts = [];
 
-  async embedTextBatch(texts, preferredHost = null) {
-    return this.embedBatch(texts, preferredHost);
+    for (let i = 0; i < texts.length; i++) {
+      const cached = cache.get(texts[i], this.model);
+      if (cached) {
+        results[i] = cached;
+      } else {
+        uncachedIndices.push(i);
+        uncachedTexts.push(texts[i]);
+      }
+    }
+
+    if (uncachedTexts.length > 0) {
+      const freshEmbeddings = await this.provider.embedBatch(uncachedTexts, preferredHost);
+      for (let j = 0; j < uncachedIndices.length; j++) {
+        results[uncachedIndices[j]] = freshEmbeddings[j];
+        cache.set(uncachedTexts[j], this.model, freshEmbeddings[j]);
+      }
+    }
+
+    return results;
   }
 
   getDimension() {
     return this.provider.getDimension();
   }
 
-  async testConnection() {
-    return this.provider.testConnection();
+  async testConnection(options = {}) {
+    const useCache = options.useCache !== false;
+    const now = Date.now();
+
+    if (
+      useCache &&
+      this._connectionStatus &&
+      now - this._connectionStatus.checkedAt < this.healthCheckTtlMs
+    ) {
+      return this._connectionStatus.healthy;
+    }
+
+    if (useCache && this._connectionStatus && !options.waitForRefresh) {
+      this.refreshConnectionStatus().catch(() => {});
+      return this._connectionStatus.healthy;
+    }
+
+    return this.refreshConnectionStatus();
+  }
+
+  getStatusInfo() {
+    if (typeof this.provider.getStatusInfo === 'function') {
+      return this.provider.getStatusInfo();
+    }
+
+    return {
+      provider: this.providerName,
+      model: this.model,
+      dimension: this.dimension,
+    };
   }
 
   destroy() {
     if (typeof this.provider.destroy === 'function') {
       this.provider.destroy();
     }
-  }
-
-  static cosineSimilarity(vec1, vec2) {
-    if (vec1.length !== vec2.length) {
-      throw new Error('Vectors must have same length');
-    }
-
-    let dotProduct = 0;
-    let norm1 = 0;
-    let norm2 = 0;
-
-    for (let i = 0; i < vec1.length; i++) {
-      dotProduct += vec1[i] * vec2[i];
-      norm1 += vec1[i] * vec1[i];
-      norm2 += vec2[i] * vec2[i];
-    }
-
-    const denominator = Math.sqrt(norm1) * Math.sqrt(norm2);
-    if (denominator === 0) return 0;
-
-    return dotProduct / denominator;
   }
 }
 

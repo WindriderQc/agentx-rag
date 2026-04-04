@@ -1,5 +1,7 @@
-const fetch = require('node-fetch');
+const fetchWithTimeout = require('../../utils/fetchWithTimeout');
 const logger = require('../../../config/logger');
+
+const EMBEDDING_TIMEOUT = Number(process.env.EMBEDDING_TIMEOUT_MS) || 60000;
 
 class OllamaProvider {
   constructor(config = {}) {
@@ -94,14 +96,14 @@ class OllamaProvider {
 
     for (const host of attemptHosts) {
       try {
-        const response = await fetch(`${host}/api/embeddings`, {
+        const response = await fetchWithTimeout(`${host}/api/embeddings`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             model: this.model,
             prompt: text,
           }),
-        });
+        }, EMBEDDING_TIMEOUT);
 
         if (!response.ok) {
           const errorText = await response.text();
@@ -131,6 +133,17 @@ class OllamaProvider {
 
   getDimension() {
     return this.dimension;
+  }
+
+  getStatusInfo() {
+    return {
+      provider: this.name,
+      model: this.model,
+      dimension: this.dimension,
+      endpoint: this.hosts[0],
+      hosts: [...this.hosts],
+      hostCount: this.hosts.length
+    };
   }
 
   async testConnection() {

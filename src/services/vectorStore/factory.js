@@ -19,9 +19,13 @@ function createVectorStore(config = {}) {
     return new QdrantVectorStore(config);
   }
 
-  const InMemoryVectorStore = require('./InMemoryVectorStore');
-  logger.info('Using in-memory vector store (data will not persist across restarts)');
-  return new InMemoryVectorStore(config);
+  if (type === 'memory') {
+    const InMemoryVectorStore = require('./InMemoryVectorStore');
+    logger.info('Using in-memory vector store (data will not persist across restarts)');
+    return new InMemoryVectorStore(config);
+  }
+
+  throw new Error(`Unknown VECTOR_STORE_TYPE: "${type}". Valid types: qdrant, memory`);
 }
 
 module.exports = { createVectorStore };

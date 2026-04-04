@@ -7,7 +7,8 @@
     "start": "node server.js",
     "dev": "node --watch server.js",
     "ingest:scan": "node ingestWorker.js --run",
-    "test": "jest --forceExit --detectOpenHandles"
+    "test": "jest --forceExit --detectOpenHandles",
+    "test:relevance": "jest --forceExit --detectOpenHandles --runTestsByPath tests/integration/relevance-golden.test.js"
   },
   "dependencies": {
     "cors": "^2.8.6",

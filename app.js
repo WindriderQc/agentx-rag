@@ -1,5 +1,7 @@
 const cors = require('cors');
 const express = require('express');
+const path = require('path');
+const logger = require('./config/logger');
 
 const app = express();
 
@@ -19,7 +21,13 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '10mb' }));
 
-app.get('/', (req, res) => res.redirect('/health'));
+app.get('/favicon.ico', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'favicon.svg'));
+});
+
+app.use(express.static(path.join(__dirname, 'public')));
+
+app.get('/', (req, res) => res.redirect('/index.html'));
 
 app.get('/health', (req, res) => {
   const dbReady = require('mongoose').connection.readyState === 1;
@@ -32,8 +40,35 @@ app.get('/health', (req, res) => {
   });
 });
 
+// ── Request-timing middleware (after /health, before API routes) ──
+app.use('/api/rag', (req, res, next) => {
+  req.startTime = Date.now();
+  const originalJson = res.json.bind(res);
+  res.json = function (body) {
+    if (body && typeof body === 'object' && req.startTime) {
+      const durationMs = Date.now() - req.startTime;
+      body.meta = { ...(body.meta || {}), durationMs };
+    }
+    return originalJson(body);
+  };
+  next();
+});
+
 app.use('/api/rag', require('./routes/rag'));
 app.use('/api/rag', require('./routes/document.routes'));
 app.use('/api/rag', require('./routes/manifest.routes'));
+app.use('/api/rag', require('./routes/migration.routes'));
+app.use('/api/rag', require('./routes/metrics.routes'));
+app.use('/api/rag', require('./routes/telemetry.routes'));
+
+app.use((req, res) => {
+  res.status(404).json({ ok: false, error: 'Not found' });
+});
+
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  logger.error('Unhandled error', { error: err.message, stack: err.stack, path: req.path });
+  res.status(500).json({ ok: false, error: 'Internal server error' });
+});
 
 module.exports = app;

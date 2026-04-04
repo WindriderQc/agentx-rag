@@ -12,8 +12,9 @@ describe('InMemoryVectorStore', () => {
       { text: 'hello world', embedding: [1, 0, 0], chunkIndex: 0 }
     ]);
 
-    const docs = await store.listDocuments();
+    const { documents: docs, total } = await store.listDocuments();
     expect(docs).toHaveLength(1);
+    expect(total).toBe(1);
     expect(docs[0].documentId).toBe('doc1');
     expect(docs[0].source).toBe('test');
     expect(docs[0].chunkCount).toBe(1);
@@ -31,8 +32,9 @@ describe('InMemoryVectorStore', () => {
     expect(r.status).toBe('updated');
     expect(r.chunkCount).toBe(2);
 
-    const docs = await store.listDocuments();
+    const { documents: docs, total } = await store.listDocuments();
     expect(docs).toHaveLength(1);
+    expect(total).toBe(1);
     expect(docs[0].chunkCount).toBe(2);
   });
 
@@ -81,7 +83,7 @@ describe('InMemoryVectorStore', () => {
     const deleted = await store.deleteDocument('doc1');
     expect(deleted).toBe(true);
 
-    const docs = await store.listDocuments();
+    const { documents: docs } = await store.listDocuments();
     expect(docs).toHaveLength(0);
 
     const results = await store.searchSimilar([1, 0, 0]);
@@ -136,6 +138,46 @@ describe('InMemoryVectorStore', () => {
     expect(h.type).toBe('memory');
   });
 
+  test('listDocuments supports limit and offset pagination', async () => {
+    for (let i = 1; i <= 5; i++) {
+      await store.upsertDocument(`doc${i}`, { source: 'test', tags: [] }, [
+        { text: `chunk ${i}`, embedding: [1, 0, 0], chunkIndex: 0 }
+      ]);
+    }
+
+    // First page: limit 2, offset 0
+    const page1 = await store.listDocuments({}, { limit: 2, offset: 0 });
+    expect(page1.documents).toHaveLength(2);
+    expect(page1.total).toBe(5);
+
+    // Second page: limit 2, offset 2
+    const page2 = await store.listDocuments({}, { limit: 2, offset: 2 });
+    expect(page2.documents).toHaveLength(2);
+    expect(page2.total).toBe(5);
+
+    // Last page: limit 2, offset 4
+    const page3 = await store.listDocuments({}, { limit: 2, offset: 4 });
+    expect(page3.documents).toHaveLength(1);
+    expect(page3.total).toBe(5);
+
+    // Beyond range: offset past total
+    const empty = await store.listDocuments({}, { limit: 2, offset: 10 });
+    expect(empty.documents).toHaveLength(0);
+    expect(empty.total).toBe(5);
+  });
+
+  test('listDocuments without pagination returns all documents', async () => {
+    for (let i = 1; i <= 3; i++) {
+      await store.upsertDocument(`doc${i}`, { source: 'test', tags: [] }, [
+        { text: `chunk ${i}`, embedding: [1, 0, 0], chunkIndex: 0 }
+      ]);
+    }
+
+    const result = await store.listDocuments();
+    expect(result.documents).toHaveLength(3);
+    expect(result.total).toBe(3);
+  });
+
   test('list documents with tag filter', async () => {
     await store.upsertDocument('doc1', { source: 'test', tags: ['api', 'docs'] }, [
       { text: 'a', embedding: [1, 0, 0], chunkIndex: 0 }
@@ -144,8 +186,9 @@ describe('InMemoryVectorStore', () => {
       { text: 'b', embedding: [0, 1, 0], chunkIndex: 0 }
     ]);
 
-    const filtered = await store.listDocuments({ tags: ['api'] });
+    const { documents: filtered, total } = await store.listDocuments({ tags: ['api'] });
     expect(filtered).toHaveLength(1);
+    expect(total).toBe(1);
     expect(filtered[0].documentId).toBe('doc1');
   });
 });

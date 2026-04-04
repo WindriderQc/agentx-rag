@@ -9,18 +9,19 @@ const express = require('express');
 const router = express.Router();
 const logger = require('../config/logger');
 const { getRagStore } = require('../src/services/ragStore');
+const { sendError } = require('../src/utils/response');
 
 // ── GET /documents/:id ──────────────────────────────────
 
 router.get('/documents/:id', async (req, res) => {
   try {
     const ragStore = getRagStore();
-    const doc = await ragStore.vectorStore.getDocument(req.params.id);
+    const doc = await ragStore.getDocument(req.params.id);
     if (!doc) {
       return res.status(404).json({ ok: false, error: 'Document not found' });
     }
 
-    const chunks = await ragStore.vectorStore.getDocumentChunks(req.params.id);
+    const chunks = await ragStore.getDocumentChunks(req.params.id);
 
     res.json({
       ok: true,
@@ -33,7 +34,7 @@ router.get('/documents/:id', async (req, res) => {
     });
   } catch (err) {
     logger.error('Get document error:', err);
-    res.status(500).json({ ok: false, error: 'Failed to get document', detail: err.message });
+    sendError(res, 500, 'Failed to get document', err.message);
   }
 });
 
@@ -42,12 +43,12 @@ router.get('/documents/:id', async (req, res) => {
 router.get('/documents/:id/chunks', async (req, res) => {
   try {
     const ragStore = getRagStore();
-    const doc = await ragStore.vectorStore.getDocument(req.params.id);
+    const doc = await ragStore.getDocument(req.params.id);
     if (!doc) {
       return res.status(404).json({ ok: false, error: 'Document not found' });
     }
 
-    const chunks = await ragStore.vectorStore.getDocumentChunks(req.params.id);
+    const chunks = await ragStore.getDocumentChunks(req.params.id);
 
     res.json({
       ok: true,
@@ -62,7 +63,7 @@ router.get('/documents/:id/chunks', async (req, res) => {
     });
   } catch (err) {
     logger.error('Get document chunks error:', err);
-    res.status(500).json({ ok: false, error: 'Failed to get document chunks', detail: err.message });
+    sendError(res, 500, 'Failed to get document chunks', err.message);
   }
 });
 

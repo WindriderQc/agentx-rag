@@ -1,5 +1,7 @@
-const fetch = require('node-fetch');
+const fetchWithTimeout = require('../../utils/fetchWithTimeout');
 const logger = require('../../../config/logger');
+
+const EMBEDDING_TIMEOUT = Number(process.env.EMBEDDING_TIMEOUT_MS) || 60000;
 
 class CoreProxyProvider {
   constructor(config = {}) {
@@ -57,11 +59,11 @@ class CoreProxyProvider {
     }
 
     try {
-      const response = await fetch(`${this.coreProxyUrl}/api/inference/embed`, {
+      const response = await fetchWithTimeout(`${this.coreProxyUrl}/api/inference/embed`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
-      });
+      }, EMBEDDING_TIMEOUT);
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -83,6 +85,16 @@ class CoreProxyProvider {
 
   getDimension() {
     return this.dimension;
+  }
+
+  getStatusInfo() {
+    return {
+      provider: this.name,
+      model: this.model,
+      dimension: this.dimension,
+      endpoint: this.coreProxyUrl,
+      route: '/api/inference/embed'
+    };
   }
 
   async testConnection() {

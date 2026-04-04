@@ -3,46 +3,67 @@
  */
 
 const VectorStoreAdapter = require('./VectorStoreAdapter');
-const fetch = require('node-fetch');
+const fetchWithTimeout = require('../../utils/fetchWithTimeout');
+const crypto = require('crypto');
 const logger = require('../../../config/logger');
+
+const QDRANT_TIMEOUT = Number(process.env.QDRANT_TIMEOUT_MS) || 30000;
 
 class QdrantVectorStore extends VectorStoreAdapter {
   constructor(config = {}) {
     super(config);
     this.qdrantUrl = config.qdrantUrl || process.env.QDRANT_URL || 'http://localhost:6333';
     this.collectionName = config.collectionName || process.env.QDRANT_COLLECTION || 'agentx_embeddings';
+    this._collectionVerified = false;
   }
 
   async _ensureCollection(vectorSize) {
+    if (this._collectionVerified) return;
+
     try {
-      const res = await fetch(`${this.qdrantUrl}/collections/${this.collectionName}`);
-      if (res.ok) return;
-    } catch (e) { /* doesn't exist yet */ }
+      const res = await fetchWithTimeout(`${this.qdrantUrl}/collections/${this.collectionName}`, {}, QDRANT_TIMEOUT);
+      if (res.ok) {
+        this._collectionVerified = true;
+        return;
+      }
+      // Non-OK but reachable (e.g. 404) — fall through to create
+    } catch (e) {
+      // ECONNREFUSED / timeout — Qdrant not running, fall through to create attempt
+      const msg = (e.message || '').toLowerCase();
+      if (!msg.includes('econnrefused') && !msg.includes('fetch failed') && !msg.includes('timed out')) {
+        throw e; // DNS failure, auth error, etc. — propagate
+      }
+    }
 
     const body = {
       vectors: { size: vectorSize, distance: 'Cosine' }
     };
-    const res = await fetch(`${this.qdrantUrl}/collections/${this.collectionName}`, {
+    const res = await fetchWithTimeout(`${this.qdrantUrl}/collections/${this.collectionName}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
-    });
+    }, QDRANT_TIMEOUT);
     if (!res.ok) {
       const text = await res.text();
       throw new Error(`Failed to create Qdrant collection: ${res.status} ${text}`);
     }
+    this._collectionVerified = true;
     logger.info(`Created Qdrant collection "${this.collectionName}" with vector size ${vectorSize}`);
   }
 
   _generatePointId(documentId, chunkIndex) {
-    let hash = 0;
-    const str = `${documentId}:${chunkIndex}`;
-    for (let i = 0; i < str.length; i++) {
-      const char = str.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash |= 0;
-    }
-    return Math.abs(hash);
+    const hex = crypto
+      .createHash('sha256')
+      .update(`${documentId}:${chunkIndex}`)
+      .digest('hex');
+    // Qdrant accepts UUID strings — build a deterministic v4-format UUID from the hash
+    return [
+      hex.slice(0, 8),
+      hex.slice(8, 12),
+      '4' + hex.slice(13, 16),
+      ((parseInt(hex[16], 16) & 0x3) | 0x8).toString(16) + hex.slice(17, 20),
+      hex.slice(20, 32)
+    ].join('-');
   }
 
   _buildMustFilters(filters) {
@@ -66,8 +87,12 @@ class QdrantVectorStore extends VectorStoreAdapter {
     const vectorSize = chunks[0].embedding.length;
     await this._ensureCollection(vectorSize);
 
-    // Delete existing chunks for this document first
-    await this._deleteByDocumentId(documentId);
+    // Collect old point IDs before inserting, so we can delete them after.
+    // Insert-first means a crash leaves duplicates rather than data loss.
+    const oldPoints = await this._scrollByFilter(
+      { key: 'documentId', match: { value: documentId } }, 10000
+    );
+    const oldPointIds = oldPoints.map((pt) => pt.id);
 
     const points = chunks.map(chunk => ({
       id: this._generatePointId(documentId, chunk.chunkIndex),
@@ -83,15 +108,21 @@ class QdrantVectorStore extends VectorStoreAdapter {
     const batchSize = 100;
     for (let i = 0; i < points.length; i += batchSize) {
       const batch = points.slice(i, i + batchSize);
-      const res = await fetch(`${this.qdrantUrl}/collections/${this.collectionName}/points`, {
+      const res = await fetchWithTimeout(`${this.qdrantUrl}/collections/${this.collectionName}/points`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ points: batch })
-      });
+      }, QDRANT_TIMEOUT);
       if (!res.ok) {
         const text = await res.text();
         throw new Error(`Qdrant upsert failed: ${res.status} ${text}`);
       }
+    }
+
+    // Delete old points by ID (not by documentId filter) so we only remove
+    // the previous version, not the freshly inserted points.
+    if (oldPointIds.length > 0) {
+      await this._deleteByPointIds(oldPointIds);
     }
 
     return { documentId, chunkCount: chunks.length, status: 'created' };
@@ -111,11 +142,11 @@ class QdrantVectorStore extends VectorStoreAdapter {
     };
     if (must.length > 0) body.filter = { must };
 
-    const res = await fetch(`${this.qdrantUrl}/collections/${this.collectionName}/points/search`, {
+    const res = await fetchWithTimeout(`${this.qdrantUrl}/collections/${this.collectionName}/points/search`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
-    });
+    }, QDRANT_TIMEOUT);
 
     if (!res.ok) {
       const text = await res.text();
@@ -137,7 +168,7 @@ class QdrantVectorStore extends VectorStoreAdapter {
     return { documentId, source: payload.source, tags: payload.tags, hash: payload.hash };
   }
 
-  async listDocuments(filters = {}) {
+  async listDocuments(filters = {}, pagination = {}) {
     const must = this._buildMustFilters(filters);
     const allPoints = await this._scrollByFilter(must.length === 1 ? must[0] : null, 10000, must.length > 1 ? { must } : null);
 
@@ -154,7 +185,14 @@ class QdrantVectorStore extends VectorStoreAdapter {
       }
       docMap.get(docId).chunkCount++;
     }
-    return Array.from(docMap.values());
+
+    const allDocs = Array.from(docMap.values());
+    const total = allDocs.length;
+    const offset = pagination.offset || 0;
+    const limit = pagination.limit || total;
+    const paged = allDocs.slice(offset, offset + limit);
+
+    return { documents: paged, total };
   }
 
   async getDocumentChunks(documentId) {
@@ -169,14 +207,31 @@ class QdrantVectorStore extends VectorStoreAdapter {
   }
 
   async _deleteByDocumentId(documentId) {
-    const res = await fetch(`${this.qdrantUrl}/collections/${this.collectionName}/points/delete`, {
+    const res = await fetchWithTimeout(`${this.qdrantUrl}/collections/${this.collectionName}/points/delete`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         filter: { must: [{ key: 'documentId', match: { value: documentId } }] }
       })
-    });
-    return res.ok;
+    }, QDRANT_TIMEOUT);
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Qdrant delete by documentId failed: ${res.status} ${text}`);
+    }
+    return true;
+  }
+
+  async _deleteByPointIds(ids) {
+    const res = await fetchWithTimeout(`${this.qdrantUrl}/collections/${this.collectionName}/points/delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ points: ids })
+    }, QDRANT_TIMEOUT);
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Qdrant delete by point IDs failed: ${res.status} ${text}`);
+    }
+    return true;
   }
 
   async _scrollByFilter(singleFilter, limit, fullFilter) {
@@ -193,12 +248,16 @@ class QdrantVectorStore extends VectorStoreAdapter {
       if (filter) body.filter = filter;
       if (offset !== null) body.offset = offset;
 
-      const res = await fetch(`${this.qdrantUrl}/collections/${this.collectionName}/points/scroll`, {
+      const res = await fetchWithTimeout(`${this.qdrantUrl}/collections/${this.collectionName}/points/scroll`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
-      });
-      if (!res.ok) return allPoints;
+      }, QDRANT_TIMEOUT);
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        logger.warn('Qdrant scroll page-fetch failed', { status: res.status, body: text });
+        throw new Error(`Qdrant scroll failed: ${res.status} ${text}`);
+      }
       const data = await res.json();
       const points = data.result?.points || [];
       allPoints = allPoints.concat(points);
@@ -217,32 +276,74 @@ class QdrantVectorStore extends VectorStoreAdapter {
   }
 
   async getStats() {
-    try {
-      const res = await fetch(`${this.qdrantUrl}/collections/${this.collectionName}`);
-      if (!res.ok) return { documentCount: 0, chunkCount: 0 };
-      const data = await res.json();
-      const info = data.result;
-      const points = await this._scrollByFilter(null, 10000);
-      const documentIds = new Set(
-        points
-          .map((point) => point?.payload?.documentId)
-          .filter(Boolean)
-      );
-
-      return {
-        documentCount: documentIds.size,
-        chunkCount: info.points_count || 0,
-        vectorDimension: info.config?.params?.vectors?.size || 0,
-        status: info.status
-      };
-    } catch (e) {
-      return { error: e.message };
+    const res = await fetchWithTimeout(`${this.qdrantUrl}/collections/${this.collectionName}`, {}, QDRANT_TIMEOUT);
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`Qdrant getStats failed: ${res.status} ${text}`);
     }
+    const data = await res.json();
+    const info = data.result;
+
+    // Lightweight scroll — only fetch documentId payload, no vectors
+    const points = await this._scrollByFilterLite(null, 10000);
+    const documentIds = new Set(
+      points
+        .map((point) => point?.payload?.documentId)
+        .filter(Boolean)
+    );
+
+    return {
+      documentCount: documentIds.size,
+      chunkCount: info.points_count || 0,
+      vectorDimension: info.config?.params?.vectors?.size || 0,
+      status: info.status
+    };
+  }
+
+  /** Lightweight scroll that only fetches documentId payload (no vectors, no text). */
+  async _scrollByFilterLite(singleFilter, limit) {
+    const pageSize = Math.min(limit || 100, 100);
+    const filter = singleFilter ? { must: [singleFilter] } : undefined;
+    let allPoints = [];
+    let offset = null;
+
+    while (true) {
+      const body = {
+        limit: pageSize,
+        with_payload: { include: ['documentId'] },
+        with_vector: false
+      };
+      if (filter) body.filter = filter;
+      if (offset !== null) body.offset = offset;
+
+      const res = await fetchWithTimeout(`${this.qdrantUrl}/collections/${this.collectionName}/points/scroll`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      }, QDRANT_TIMEOUT);
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        logger.warn('Qdrant scroll (lite) page-fetch failed', { status: res.status, body: text });
+        throw new Error(`Qdrant scroll failed: ${res.status} ${text}`);
+      }
+      const resData = await res.json();
+      const points = resData.result?.points || [];
+      allPoints = allPoints.concat(points);
+
+      if (limit && allPoints.length >= limit) {
+        allPoints = allPoints.slice(0, limit);
+        break;
+      }
+      const nextOffset = resData.result?.next_page_offset;
+      if (nextOffset == null) break;
+      offset = nextOffset;
+    }
+    return allPoints;
   }
 
   async healthCheck() {
     try {
-      const res = await fetch(`${this.qdrantUrl}/collections`);
+      const res = await fetchWithTimeout(`${this.qdrantUrl}/collections`, {}, QDRANT_TIMEOUT);
       return { healthy: res.ok, type: 'qdrant', url: this.qdrantUrl };
     } catch (e) {
       return { healthy: false, type: 'qdrant', error: e.message };

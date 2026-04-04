@@ -66,7 +66,7 @@ class InMemoryVectorStore extends VectorStoreAdapter {
     return this.documents.get(documentId) || null;
   }
 
-  async listDocuments(filters = {}) {
+  async listDocuments(filters = {}, pagination = {}) {
     let docs = Array.from(this.documents.values());
     Object.keys(filters).forEach(key => {
       if (key === 'tags') {
@@ -77,7 +77,13 @@ class InMemoryVectorStore extends VectorStoreAdapter {
         docs = docs.filter(d => d[key] === filters[key]);
       }
     });
-    return docs;
+
+    const total = docs.length;
+    const offset = pagination.offset || 0;
+    const limit = pagination.limit || total; // no limit if not specified
+    const paged = docs.slice(offset, offset + limit);
+
+    return { documents: paged, total };
   }
 
   async getDocumentChunks(documentId) {

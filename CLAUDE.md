@@ -22,6 +22,9 @@ All responses use the envelope: `{ ok: true/false, data?: ..., error?: "message"
 |----------|--------|-------------|
 | `/api/rag/ingest` | POST | Ingest a text document with chunking + embedding |
 | `/api/rag/documents` | POST | Alias for `/ingest` |
+| `/api/rag/ingest-scan` | POST | Start async NAS scan + ingestion (returns 202 + jobId, max 1 concurrent) |
+| `/api/rag/ingest-scan/:jobId` | GET | Poll ingest-scan job progress |
+| `/api/rag/ingest-scan/:jobId` | DELETE | Cancel a running ingest-scan job |
 
 **Ingest body:**
 ```json
@@ -47,9 +50,17 @@ All responses use the envelope: `{ ok: true/false, data?: ..., error?: "message"
   "query": "search text (required)",
   "topK": 5,
   "minScore": 0.0,
-  "filters": { "source": "docs", "tags": ["tag1"] }
+  "filters": { "source": "docs", "tags": ["tag1"] },
+  "expand": false,
+  "hybrid": false,
+  "rerank": false,
+  "compress": false
 }
 ```
+
+When `rerank: true`, the service fetches `topK * 3` candidates, scores each via LLM judge (Ollama `RERANK_MODEL`, default `llama3.1:8b`), and returns the top `topK` sorted by judge score. Falls back to vector scores if the LLM is unavailable.
+
+When `compress: true`, after retrieval (and optional re-ranking), each result chunk is passed through a small LLM (`COMPRESSION_MODEL`, default `gemma2:2b`) that extracts only the sentences relevant to the query. Results include `compressedText`, `originalText`, `wasCompressed`, and `compressionRatio` fields. Results with no relevant content are filtered out entirely. An LRU cache (1-hour TTL) prevents redundant LLM calls. Falls back to original text if the LLM is unavailable.
 
 ### Documents
 
@@ -80,6 +91,7 @@ All responses use the envelope: `{ ok: true/false, data?: ..., error?: "message"
 Per ecosystem CLAUDE.md, RAG owns:
 - `ragmanifests` — Folder scan manifests
 - `embeddingcachestats` — Cache performance counters (planned)
+- `ingestjobs` — Ingest telemetry records (timing, status, chunk counts)
 
 RAG must NOT write to collections owned by other services.
 
@@ -123,7 +135,11 @@ rag/
 │   ├── services/
 │   │   ├── embeddings.js        — Embedding provider facade
 │   │   ├── ragStore.js          — Orchestrator (embed + store)
-│   │   └── ragStoreUtils.js     — Chunking + hashing utilities
+│   │   ├── ragStoreUtils.js     — Chunking + hashing utilities
+│   │   ├── queryExpansion.js    — LLM-based query expansion
+│   │   ├── keywordSearch.js     — BM25-like keyword search
+│   │   ├── reranker.js          — LLM judge re-ranking
+│   │   └── ragCompression.js   — Contextual compression (sentence extraction)
 │   ├── services/vectorStore/
 │   │   ├── VectorStoreAdapter.js    — Abstract interface (8 methods)
 │   │   ├── InMemoryVectorStore.js   — Dev/test adapter
@@ -147,8 +163,15 @@ QDRANT_URL=http://192.168.2.33:6333
 QDRANT_COLLECTION=agentx_embeddings
 EMBEDDING_MODEL=nomic-embed-text:v1.5
 EMBEDDING_DIMENSION=768
+OLLAMA_HOSTS=192.168.2.99:11434,192.168.2.66:11434
 CORE_PROXY_URL=http://localhost:3080
 CORS_ORIGINS=http://localhost:3080,http://localhost:3082
+QUERY_EXPANSION_MODEL=gemma2:2b       # LLM for query expansion
+RERANK_MODEL=llama3.1:8b              # LLM judge for re-ranking
+RERANK_TIMEOUT_MS=15000               # Per-result scoring timeout
+COMPRESSION_MODEL=gemma2:2b           # LLM for contextual compression
+COMPRESSION_TIMEOUT_MS=15000          # Per-chunk compression timeout
+COMPRESSION_CACHE_TTL=3600000         # Compression cache TTL (ms, default 1hr)
 ```
 
 ## Running

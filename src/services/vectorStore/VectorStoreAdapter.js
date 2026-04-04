@@ -22,7 +22,7 @@ class VectorStoreAdapter {
     throw new Error('getDocument() must be implemented');
   }
 
-  async listDocuments(_filters = {}) {
+  async listDocuments(_filters = {}, _pagination = {}) {
     throw new Error('listDocuments() must be implemented');
   }
 

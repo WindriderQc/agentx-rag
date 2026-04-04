@@ -21,7 +21,7 @@ const mockVectorStore = {
 
 jest.mock('../../src/services/embeddings', () => ({
   getEmbeddingsService: () => ({
-    embedTextBatch: jest.fn().mockResolvedValue([[0.1, 0.2, 0.3]])
+    embedBatch: jest.fn().mockResolvedValue([[0.1, 0.2, 0.3]])
   })
 }));
 
@@ -47,6 +47,8 @@ jest.mock('../../models/RagManifest', () => {
   const mock = {
     findOneAndUpdate: jest.fn(),
     findOne: jest.fn(),
+    findById: jest.fn(),
+    find: jest.fn(),
   };
   return mock;
 });
@@ -125,10 +127,13 @@ describe('GET /api/rag/deletion-preview', () => {
     const sortMock = { lean: jest.fn().mockResolvedValue(mockManifestDoc) };
     RagManifest.findOne.mockReturnValue({ sort: () => sortMock });
 
-    mockVectorStore.listDocuments.mockResolvedValue([
-      { documentId: 'file1.txt', source: 'test-source', chunkCount: 3 },
-      { documentId: 'file3.txt', source: 'test-source', chunkCount: 2 }  // stale — not in manifest
-    ]);
+    mockVectorStore.listDocuments.mockResolvedValue({
+      documents: [
+        { documentId: 'file1.txt', source: 'test-source', chunkCount: 3 },
+        { documentId: 'file3.txt', source: 'test-source', chunkCount: 2 }  // stale — not in manifest
+      ],
+      total: 2
+    });
 
     const app = buildApp();
     const res = await request(app).get('/api/rag/deletion-preview?source=test-source');
@@ -142,12 +147,40 @@ describe('GET /api/rag/deletion-preview', () => {
     expect(res.body.data.fresh).toBe(1);
   });
 
-  it('requires source query param', async () => {
+  it('returns multi-source aggregate when source is omitted', async () => {
+    RagManifest.find.mockReturnValue({
+      lean: jest.fn().mockResolvedValue([
+        { ...mockManifestDoc, source: 'nas-scan' },
+        { ...mockManifestDoc, source: 'api', files: [] }
+      ])
+    });
+
+    mockVectorStore.listDocuments
+      .mockResolvedValueOnce({
+        documents: [
+          { documentId: 'file1.txt', source: 'nas-scan', chunkCount: 3 },
+          { documentId: 'gone.txt', source: 'nas-scan', chunkCount: 1 }
+        ],
+        total: 2
+      })
+      .mockResolvedValueOnce({
+        documents: [
+          { documentId: 'orphan.txt', source: 'api', chunkCount: 2 }
+        ],
+        total: 1
+      });
+
     const app = buildApp();
     const res = await request(app).get('/api/rag/deletion-preview');
 
-    expect(res.status).toBe(400);
-    expect(res.body.ok).toBe(false);
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.data.sources).toHaveLength(2);
+    expect(res.body.data.sources[0].source).toBe('nas-scan');
+    expect(res.body.data.sources[0].staleCount).toBe(1);  // gone.txt
+    expect(res.body.data.sources[1].source).toBe('api');
+    expect(res.body.data.sources[1].staleCount).toBe(1);  // orphan.txt
+    expect(res.body.data.totalStale).toBe(2);
   });
 });
 
@@ -156,10 +189,16 @@ describe('POST /api/rag/cleanup', () => {
     const sortMock = { lean: jest.fn().mockResolvedValue(mockManifestDoc) };
     RagManifest.findOne.mockReturnValue({ sort: () => sortMock });
 
-    mockVectorStore.listDocuments.mockResolvedValue([
-      { documentId: 'file1.txt', source: 'test-source', chunkCount: 3 },
-      { documentId: 'gone.txt', source: 'test-source', chunkCount: 1 }
-    ]);
+    // Reset to clear any queued mockResolvedValueOnce from prior tests
+    mockVectorStore.listDocuments.mockReset();
+    mockVectorStore.listDocuments.mockResolvedValue({
+      documents: [
+        { documentId: 'file1.txt', source: 'test-source', chunkCount: 3 },
+        { documentId: 'gone.txt', source: 'test-source', chunkCount: 1 }
+      ],
+      total: 2
+    });
+    mockVectorStore.deleteDocument.mockReset();
     mockVectorStore.deleteDocument.mockResolvedValue(true);
   };
 
@@ -173,11 +212,14 @@ describe('POST /api/rag/cleanup', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.data.dryRun).toBe(true);
-    expect(res.body.data.deleted).toBe(1);
+    expect(res.body.data.staleCount).toBe(1);
+    expect(res.body.data.documents).toHaveLength(1);
+    expect(res.body.data.manifestId).toBeDefined();
+    expect(res.body.data.manifestGeneratedAt).toBeDefined();
     expect(mockVectorStore.deleteDocument).not.toHaveBeenCalled();
   });
 
-  it('actual cleanup deletes stale documents', async () => {
+  it('actual cleanup deletes stale documents with per-doc results', async () => {
     setupStaleMocks();
     const app = buildApp();
 
@@ -187,7 +229,13 @@ describe('POST /api/rag/cleanup', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.data.dryRun).toBe(false);
-    expect(res.body.data.deleted).toBe(1);
+    expect(res.body.data.deleted).toEqual(['gone.txt']);
+    expect(res.body.data.errors).toEqual([]);
+    expect(res.body.data.stats.attempted).toBe(1);
+    expect(res.body.data.stats.succeeded).toBe(1);
+    expect(res.body.data.stats.failed).toBe(0);
+    expect(res.body.data.manifestId).toBeDefined();
+    expect(res.body.data.manifestGeneratedAt).toBeDefined();
     expect(mockVectorStore.deleteDocument).toHaveBeenCalledWith('gone.txt');
   });
 
@@ -201,6 +249,120 @@ describe('POST /api/rag/cleanup', () => {
 
     expect(res.body.data.dryRun).toBe(true);
     expect(mockVectorStore.deleteDocument).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when stale count exceeds maxDeletes in non-dryRun mode', async () => {
+    // Set up 3 stale docs, maxDeletes = 2
+    const sortMock = { lean: jest.fn().mockResolvedValue(mockManifestDoc) };
+    RagManifest.findOne.mockReturnValue({ sort: () => sortMock });
+    mockVectorStore.listDocuments.mockResolvedValue({
+      documents: [
+        { documentId: 'file1.txt', source: 'test-source', chunkCount: 1 },
+        { documentId: 'stale1.txt', source: 'test-source', chunkCount: 1 },
+        { documentId: 'stale2.txt', source: 'test-source', chunkCount: 1 },
+        { documentId: 'stale3.txt', source: 'test-source', chunkCount: 1 }
+      ],
+      total: 4
+    });
+
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/rag/cleanup')
+      .send({ source: 'test-source', dryRun: false, maxDeletes: 2 });
+
+    expect(res.status).toBe(400);
+    expect(res.body.ok).toBe(false);
+    expect(res.body.error).toMatch(/exceeds maxDeletes/);
+    expect(mockVectorStore.deleteDocument).not.toHaveBeenCalled();
+  });
+
+  it('dryRun ignores maxDeletes cap', async () => {
+    // Same 3 stale docs, maxDeletes = 1, but dryRun = true
+    const sortMock = { lean: jest.fn().mockResolvedValue(mockManifestDoc) };
+    RagManifest.findOne.mockReturnValue({ sort: () => sortMock });
+    mockVectorStore.listDocuments.mockResolvedValue({
+      documents: [
+        { documentId: 'file1.txt', source: 'test-source', chunkCount: 1 },
+        { documentId: 'stale1.txt', source: 'test-source', chunkCount: 1 },
+        { documentId: 'stale2.txt', source: 'test-source', chunkCount: 1 }
+      ],
+      total: 3
+    });
+
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/rag/cleanup')
+      .send({ source: 'test-source', dryRun: true, maxDeletes: 1 });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.dryRun).toBe(true);
+    expect(res.body.data.staleCount).toBe(2);
+  });
+
+  it('per-document error handling captures failures without aborting', async () => {
+    const sortMock = { lean: jest.fn().mockResolvedValue(mockManifestDoc) };
+    RagManifest.findOne.mockReturnValue({ sort: () => sortMock });
+    mockVectorStore.listDocuments.mockResolvedValue({
+      documents: [
+        { documentId: 'file1.txt', source: 'test-source', chunkCount: 1 },
+        { documentId: 'bad.txt', source: 'test-source', chunkCount: 1 },
+        { documentId: 'also-stale.txt', source: 'test-source', chunkCount: 1 }
+      ],
+      total: 3
+    });
+    mockVectorStore.deleteDocument
+      .mockRejectedValueOnce(new Error('Qdrant timeout'))
+      .mockResolvedValueOnce(true);
+
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/rag/cleanup')
+      .send({ source: 'test-source', dryRun: false, maxDeletes: 100 });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.deleted).toEqual(['also-stale.txt']);
+    expect(res.body.data.errors).toHaveLength(1);
+    expect(res.body.data.errors[0].documentId).toBe('bad.txt');
+    expect(res.body.data.errors[0].error).toBe('Qdrant timeout');
+    expect(res.body.data.stats.attempted).toBe(2);
+    expect(res.body.data.stats.succeeded).toBe(1);
+    expect(res.body.data.stats.failed).toBe(1);
+  });
+
+  it('accepts manifestId to target a specific manifest', async () => {
+    const specificManifest = { ...mockManifestDoc, _id: 'specific-manifest-id' };
+    RagManifest.findById.mockReturnValue({ lean: jest.fn().mockResolvedValue(specificManifest) });
+    mockVectorStore.listDocuments.mockResolvedValue({
+      documents: [
+        { documentId: 'file1.txt', source: 'test-source', chunkCount: 3 },
+        { documentId: 'gone.txt', source: 'test-source', chunkCount: 1 }
+      ],
+      total: 2
+    });
+    mockVectorStore.deleteDocument.mockResolvedValue(true);
+
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/rag/cleanup')
+      .send({ source: 'test-source', manifestId: 'specific-manifest-id', dryRun: false });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.manifestId).toBe('specific-manifest-id');
+    expect(res.body.data.deleted).toEqual(['gone.txt']);
+    expect(RagManifest.findById).toHaveBeenCalledWith('specific-manifest-id');
+  });
+
+  it('returns 404 when manifestId does not exist', async () => {
+    RagManifest.findById.mockReturnValue({ lean: jest.fn().mockResolvedValue(null) });
+
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/rag/cleanup')
+      .send({ source: 'test-source', manifestId: 'nonexistent-id', dryRun: false });
+
+    expect(res.status).toBe(404);
+    expect(res.body.ok).toBe(false);
+    expect(res.body.error).toMatch(/not found/);
   });
 });
 
