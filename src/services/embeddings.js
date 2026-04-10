@@ -30,12 +30,11 @@ class EmbeddingsService {
     this._connectionStatus = null;
     this._connectionStatusPromise = null;
 
-    this.refreshConnectionStatus().catch((error) => {
-      logger.warn('Initial embedding health check failed', {
-        provider: this.providerName,
-        error: error.message
-      });
-    });
+    // NOTE: do NOT eagerly fire a health check here. Kicking off a detached
+    // fetch in the constructor leaks timers + TCP sockets in short-lived
+    // processes (e.g. Jest test runs) because the promise can outlive the
+    // process that requested it. The first /status call, or any explicit
+    // testConnection(), will trigger refreshConnectionStatus() on demand.
   }
 
   getCachedConnectionStatus() {
