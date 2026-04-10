@@ -126,31 +126,66 @@ rag/
 ├── AGENTS.md                    — Agent integration guide
 ├── config/
 │   ├── db.js                    — MongoDB connection
-│   └── logger.js                — Winston logger (console + file)
+│   ├── logger.js                — Winston logger (console + file)
+│   └── createLogger.js          — Logger factory helper
 ├── models/
-│   └── RagManifest.js           — Mongoose schema for folder scan manifests
+│   ├── RagManifest.js           — Mongoose schema for folder scan manifests
+│   └── IngestJob.js             — Mongoose schema for ingest job telemetry
 ├── routes/
-│   └── rag.js                   — Core RAG API endpoints
+│   ├── rag.js                   — Core RAG API endpoints (ingest, search, status)
+│   ├── document.routes.js       — Document CRUD endpoints
+│   ├── manifest.routes.js       — RAG manifest endpoints
+│   ├── metrics.routes.js        — Embedding/cache metrics endpoints
+│   ├── migration.routes.js      — Embedding migration endpoints
+│   └── telemetry.routes.js      — Ingest telemetry endpoints
 ├── src/
 │   ├── services/
 │   │   ├── embeddings.js        — Embedding provider facade
+│   │   ├── embeddingCache.js    — LRU cache for embeddings
 │   │   ├── ragStore.js          — Orchestrator (embed + store)
 │   │   ├── ragStoreUtils.js     — Chunking + hashing utilities
 │   │   ├── queryExpansion.js    — LLM-based query expansion
 │   │   ├── keywordSearch.js     — BM25-like keyword search
 │   │   ├── reranker.js          — LLM judge re-ranking
-│   │   └── ragCompression.js   — Contextual compression (sentence extraction)
+│   │   ├── ragCompression.js    — Contextual compression (sentence extraction)
+│   │   ├── ingestJobManager.js  — Async ingest job lifecycle manager
+│   │   └── ingestWorker.js      — NAS scan + ingest background worker
+│   ├── services/embeddings/
+│   │   ├── coreProxyProvider.js — Core inference-proxy embedding provider
+│   │   └── ollamaProvider.js    — Direct Ollama embedding provider
 │   ├── services/vectorStore/
 │   │   ├── VectorStoreAdapter.js    — Abstract interface (8 methods)
 │   │   ├── InMemoryVectorStore.js   — Dev/test adapter
 │   │   ├── QdrantVectorStore.js     — Production Qdrant adapter
 │   │   └── factory.js               — Store factory
 │   └── utils/
-│       └── cosineSimilarity.js      — Shared cosine similarity function
+│       ├── cosineSimilarity.js      — Shared cosine similarity function
+│       ├── fetchWithTimeout.js      — node-fetch wrapper with AbortController timeout
+│       └── response.js              — Standard API envelope helpers
 └── tests/
-    └── unit/
-        ├── ragStoreUtils.test.js
-        └── qdrantVectorStore.test.js
+    ├── unit/
+    │   ├── batchIngest.test.js
+    │   ├── cosineSimilarity.test.js
+    │   ├── embeddingCache.test.js
+    │   ├── embeddings.test.js
+    │   ├── health.test.js
+    │   ├── inMemoryVectorStore.test.js
+    │   ├── ingestJobManager.test.js
+    │   ├── ingestScanRoute.test.js
+    │   ├── ingestWorker.test.js
+    │   ├── keywordSearch.test.js
+    │   ├── manifests.test.js
+    │   ├── migration.test.js
+    │   ├── qdrantVectorStore.test.js
+    │   ├── queryExpansion.test.js
+    │   ├── ragCompression.test.js
+    │   ├── ragStore.test.js
+    │   ├── ragStoreUtils.test.js
+    │   ├── reranker.test.js
+    │   └── statusAndMetrics.test.js
+    └── integration/
+        ├── ingest-search.test.js
+        └── relevance-golden.test.js
 ```
 
 ## Environment Variables
