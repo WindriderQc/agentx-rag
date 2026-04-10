@@ -5,6 +5,13 @@ const logger = require('./config/logger');
 
 const app = express();
 
+// EJS templating — shared layouts from core, local pages
+app.set('view engine', 'ejs');
+app.set('views', [
+  path.join(__dirname, 'views'),
+  path.join(__dirname, '..', 'core', 'views')
+]);
+
 const defaultAllowedOrigins = [
   'http://localhost:3080',
   'http://127.0.0.1:3080',
@@ -26,8 +33,79 @@ app.get('/favicon.ico', (req, res) => {
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, '..', 'core', 'public')));
 
-app.get('/', (req, res) => res.redirect('/index.html'));
+// ── Page routes (EJS) ────────────────────────────────────────────────────────
+const ragHeadCss = '<link rel="stylesheet" href="/css/style.css">';
+
+const dashboardPageView = path.resolve(__dirname, 'views/pages/dashboard');
+const documentsPageView = path.resolve(__dirname, 'views/pages/documents');
+const searchPageView    = path.resolve(__dirname, 'views/pages/search');
+const uploadPageView    = path.resolve(__dirname, 'views/pages/upload');
+const maintenancePageView = path.resolve(__dirname, 'views/pages/maintenance');
+
+app.get('/', (req, res) => {
+  res.render('layouts/main', {
+    pageView: dashboardPageView,
+    title: 'AgentX RAG — Dashboard',
+    service: 'rag',
+    activePage: 'rag',
+    bodyClass: 'dashboard-body',
+    headCss: ragHeadCss,
+    footerJs: '<script src="/js/api.js"></script>\n<script src="/js/dashboard.js"></script>'
+  });
+});
+
+app.get('/documents', (req, res) => {
+  res.render('layouts/main', {
+    pageView: documentsPageView,
+    title: 'AgentX RAG — Documents',
+    service: 'rag',
+    activePage: 'rag',
+    headCss: ragHeadCss,
+    footerJs: '<script src="/js/api.js"></script>\n<script src="/js/documents.js"></script>'
+  });
+});
+
+app.get('/search', (req, res) => {
+  res.render('layouts/main', {
+    pageView: searchPageView,
+    title: 'AgentX RAG — Search Playground',
+    service: 'rag',
+    activePage: 'rag',
+    headCss: ragHeadCss,
+    footerJs: '<script src="/js/api.js"></script>\n<script src="/js/search.js"></script>'
+  });
+});
+
+app.get('/upload', (req, res) => {
+  res.render('layouts/main', {
+    pageView: uploadPageView,
+    title: 'AgentX RAG — Upload',
+    service: 'rag',
+    activePage: 'rag',
+    headCss: ragHeadCss,
+    footerJs: '<script src="/js/api.js"></script>\n<script src="/js/upload.js"></script>'
+  });
+});
+
+app.get('/maintenance', (req, res) => {
+  res.render('layouts/main', {
+    pageView: maintenancePageView,
+    title: 'AgentX RAG — Maintenance',
+    service: 'rag',
+    activePage: 'rag',
+    headCss: ragHeadCss,
+    footerJs: '<script src="/js/api.js"></script>\n<script src="/js/maintenance.js"></script>'
+  });
+});
+
+// ── Legacy .html redirects ───────────────────────────────────────────────────
+app.get('/index.html',       (req, res) => res.redirect(301, '/'));
+app.get('/documents.html',   (req, res) => res.redirect(301, '/documents'));
+app.get('/search.html',      (req, res) => res.redirect(301, '/search'));
+app.get('/upload.html',      (req, res) => res.redirect(301, '/upload'));
+app.get('/maintenance.html', (req, res) => res.redirect(301, '/maintenance'));
 
 app.get('/health', (req, res) => {
   const dbReady = require('mongoose').connection.readyState === 1;

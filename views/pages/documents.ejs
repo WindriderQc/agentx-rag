@@ -1,0 +1,41 @@
+<div class="container">
+  <h1 class="page-title">Documents</h1>
+
+  <!-- Summary counts -->
+  <div class="doc-summary">
+    <span><strong id="doc-count">--</strong> documents</span>
+    <span class="sep">&middot;</span>
+    <span><strong id="chunk-count">--</strong> total chunks</span>
+  </div>
+
+  <!-- Filter bar -->
+  <div class="filter-bar">
+    <label for="filter-source">Source</label>
+    <select id="filter-source" class="input-field">
+      <option value="">All sources</option>
+    </select>
+    <label for="filter-tags">Tags</label>
+    <input id="filter-tags" class="input-field" type="text" placeholder="tag1, tag2">
+    <button id="btn-apply" class="btn btn-primary">Apply</button>
+    <button id="btn-clear" class="btn btn-secondary">Clear</button>
+  </div>
+
+  <!-- Document table -->
+  <div id="doc-table-wrap">
+    <table class="data-table" id="doc-table">
+      <thead>
+        <tr>
+          <th>Document ID</th>
+          <th>Source</th>
+          <th>Chunks</th>
+          <th>Tags</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="doc-tbody"></tbody>
+    </table>
+    <div id="empty-state" class="empty-state" style="display:none;">No documents found.</div>
+    <div id="loading-state" class="loading">Loading documents...</div>
+    <div id="error-state" class="error-state" style="display:none;"></div>
+  </div>
+</div>

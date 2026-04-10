@@ -1,0 +1,37 @@
+<div class="container">
+  <h1 class="page-title">Search Playground</h1>
+
+  <!-- Query input -->
+  <div class="card search-card">
+    <textarea id="search-query" class="input-field search-textarea"
+      placeholder="Enter your search query..." rows="3"></textarea>
+
+    <!-- Controls row -->
+    <div class="search-controls">
+      <div class="control-group">
+        <label for="topk-slider">topK: <span id="topk-value" class="mono">5</span></label>
+        <input id="topk-slider" type="range" min="1" max="20" value="5" class="slider">
+      </div>
+      <div class="control-group">
+        <label for="minscore-slider">minScore: <span id="minscore-value" class="mono">0.00</span></label>
+        <input id="minscore-slider" type="range" min="0" max="100" value="0" class="slider">
+      </div>
+      <div class="control-group">
+        <label for="search-source">Source</label>
+        <input id="search-source" class="input-field input-sm" type="text" placeholder="optional">
+      </div>
+      <div class="control-group">
+        <label for="search-tags">Tags</label>
+        <input id="search-tags" class="input-field input-sm" type="text" placeholder="tag1, tag2">
+      </div>
+    </div>
+
+    <button id="btn-search" class="btn btn-primary btn-lg">Search</button>
+  </div>
+
+  <!-- Results area -->
+  <div id="search-meta" class="search-meta" style="display:none;"></div>
+  <div id="search-results" class="search-results"></div>
+  <div id="search-empty" class="empty-state" style="display:none;">No results found.</div>
+  <div id="search-error" class="error-state" style="display:none;"></div>
+</div>

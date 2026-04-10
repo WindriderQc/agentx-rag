@@ -227,7 +227,7 @@ router.post('/ingest-scan', async (req, res) => {
     if (Array.isArray(roots)) {
       const invalid = roots.filter((r) => !allowedRoots.some((allowed) => isPathUnderRoot(r, allowed)));
       if (invalid.length) {
-        return sendError(res, 400, 'INVALID_ROOTS', `Roots not under configured paths: \${invalid.join(', ')}`);
+        return sendError(res, 400, 'INVALID_ROOTS', `Roots not under configured paths: ${invalid.join(', ')}`);
       }
     }
 
@@ -315,7 +315,7 @@ router.delete('/ingest-scan/:jobId', (req, res) => {
   }
 
   if (job.status !== 'running') {
-    return sendError(res, 400, 'JOB_NOT_RUNNING', `Job is \${job.status}, cannot cancel`);
+    return sendError(res, 400, 'JOB_NOT_RUNNING', `Job is ${job.status}, cannot cancel`);
   }
 
   jobManager.cancelJob(req.params.jobId);

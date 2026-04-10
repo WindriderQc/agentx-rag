@@ -143,10 +143,10 @@
   }
 
   /**
-   * POST /api/rag/reindex — trigger embedding reindex (planned).
+   * POST /api/rag/embedding-migration/reindex — trigger embedding reindex.
    */
   async function triggerReindex() {
-    return apiFetch('/api/rag/reindex', {
+    return apiFetch('/api/rag/embedding-migration/reindex', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({})
