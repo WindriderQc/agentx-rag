@@ -28,6 +28,14 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '10mb' }));
 
+// Expose request hostname to all templates (for cross-service nav links).
+// The shared nav (rendered from core/views/partials/nav.ejs) uses reqHost
+// to build absolute URLs to core (3080) and benchmark (3081).
+app.use((req, res, next) => {
+  res.locals.reqHost = req.hostname;
+  next();
+});
+
 app.get('/favicon.ico', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'favicon.svg'));
 });
