@@ -85,9 +85,8 @@ async function rerankResults(query, results, topK = 5) {
             stream: false,
             callerDetail: 'rag-reranker',
             options: {
-              temperature: 0.1, // Low temperature for consistent scoring
-              num_predict: 10,  // Just need a number
-              num_ctx: 8192
+              temperature: 0.1,
+              num_predict: 10
             }
           })
         }, RERANK_TIMEOUT);

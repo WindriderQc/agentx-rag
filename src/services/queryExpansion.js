@@ -41,8 +41,7 @@ Return ONLY the queries, one per line, without numbering or explanation.`;
         callerDetail: 'rag-query-expansion',
         options: {
           temperature: 0.7,
-          num_predict: 200,
-          num_ctx: 8192
+          num_predict: 200
         }
       })
     }, EXPANSION_TIMEOUT);

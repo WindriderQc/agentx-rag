@@ -156,8 +156,7 @@ Extract the most relevant sentences:`;
           callerDetail: 'rag-compression',
           options: {
             temperature: 0.1,
-            num_predict: 300,
-            num_ctx: 8192
+            num_predict: 300
           }
         })
       }, COMPRESSION_TIMEOUT);
