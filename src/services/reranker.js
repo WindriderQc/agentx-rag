@@ -10,10 +10,12 @@
 'use strict';
 
 const fetchWithTimeout = require('../utils/fetchWithTimeout');
+const { boundedConcurrency } = require('../utils/boundedConcurrency');
 const logger = require('../../config/logger');
 
 const CORE_PROXY_URL = (process.env.CORE_PROXY_URL || 'http://localhost:3080').replace(/\/+$/, '');
 const RERANK_TIMEOUT = Number(process.env.RERANK_TIMEOUT_MS) || 15000;
+const RERANK_CONCURRENCY = Number(process.env.RERANK_CONCURRENCY) || 2;
 
 /**
  * Build the LLM relevance-scoring prompt.
@@ -71,8 +73,10 @@ async function rerankResults(query, results, topK = 5) {
   }
 
   try {
-    // Score each result in parallel
-    const scoringPromises = results.map(async (result, idx) => {
+    // Score each result with a bounded concurrency cap. Unbounded Promise.all
+    // fan-out (one call per candidate, up to 50) was evicting the target
+    // host's KV cache mid-batch — tune via RERANK_CONCURRENCY env var.
+    const scoredResults = await boundedConcurrency(results, async (result, idx) => {
       const prompt = buildScoringPrompt(query, result.text || '');
 
       try {
@@ -108,9 +112,7 @@ async function rerankResults(query, results, topK = 5) {
         logger.warn(`Re-ranking error for result ${idx}`, { error: error.message });
         return { ...result, llmScore: result.score, vectorScore: result.score };
       }
-    });
-
-    const scoredResults = await Promise.all(scoringPromises);
+    }, RERANK_CONCURRENCY);
 
     // Sort by LLM score (descending) and return top K
     const reranked = scoredResults

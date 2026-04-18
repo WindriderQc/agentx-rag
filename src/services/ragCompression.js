@@ -13,10 +13,12 @@
 
 const crypto = require('crypto');
 const fetchWithTimeout = require('../utils/fetchWithTimeout');
+const { boundedConcurrency } = require('../utils/boundedConcurrency');
 const logger = require('../../config/logger');
 
 const CORE_PROXY_URL = (process.env.CORE_PROXY_URL || 'http://localhost:3080').replace(/\/+$/, '');
 const COMPRESSION_TIMEOUT = Number(process.env.COMPRESSION_TIMEOUT_MS) || 15000;
+const COMPRESSION_CONCURRENCY = Number(process.env.COMPRESSION_CONCURRENCY) || 2;
 
 class RAGCompressionService {
   constructor() {
@@ -51,7 +53,10 @@ class RAGCompressionService {
       originalTokens
     });
 
-    const compressionPromises = chunks.map(async (chunk) => {
+    // Bounded fan-out — one LLM call per chunk; unbounded Promise.all on
+    // 50 chunks would saturate the compression host and evict its KV cache.
+    // Tune via COMPRESSION_CONCURRENCY env var.
+    const compressedChunks = await boundedConcurrency(chunks, async (chunk) => {
       // Check cache first
       const cacheKey = this._buildCacheKey(query, chunk);
       if (useCache && this.compressionCache.has(cacheKey)) {
@@ -76,9 +81,7 @@ class RAGCompressionService {
       }
 
       return compressed;
-    });
-
-    const compressedChunks = await Promise.all(compressionPromises);
+    }, COMPRESSION_CONCURRENCY);
 
     // Filter out chunks that became empty after compression
     const validChunks = compressedChunks.filter(c => c.compressedText && c.compressedText.length > 0);
