@@ -113,6 +113,21 @@ class InMemoryVectorStore extends VectorStoreAdapter {
     return { healthy: true, type: 'memory' };
   }
 
+  async getDocumentOriginalText(documentId) {
+    const doc = this.documents.get(documentId);
+    if (!doc) return null;
+    return doc.originalText ?? null;
+  }
+
+  async setDocumentOriginalText(documentId, text) {
+    const existing = this.documents.get(documentId);
+    if (existing) {
+      existing.originalText = text;
+    } else {
+      this.documents.set(documentId, { documentId, originalText: text });
+    }
+  }
+
 }
 
 module.exports = InMemoryVectorStore;

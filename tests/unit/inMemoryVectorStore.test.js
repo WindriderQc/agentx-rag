@@ -178,6 +178,49 @@ describe('InMemoryVectorStore', () => {
     expect(result.total).toBe(3);
   });
 
+  describe('originalText get/set (0163)', () => {
+    test('set-then-get roundtrip preserves non-ASCII + newlines', async () => {
+      const text = 'hello\nworld — é';
+      await store.setDocumentOriginalText('doc1', text);
+      const got = await store.getDocumentOriginalText('doc1');
+      expect(got).toBe(text);
+    });
+
+    test('get on never-set document returns null (not undefined)', async () => {
+      const got = await store.getDocumentOriginalText('never-set');
+      expect(got).toBeNull();
+      // Explicitly ensure it is not undefined
+      expect(got === undefined).toBe(false);
+    });
+
+    test('set overwrites an existing value', async () => {
+      await store.setDocumentOriginalText('doc1', 'first');
+      await store.setDocumentOriginalText('doc1', 'second');
+      const got = await store.getDocumentOriginalText('doc1');
+      expect(got).toBe('second');
+    });
+
+    test('set before upsert creates a minimal doc entry, get returns the text', async () => {
+      await store.setDocumentOriginalText('orphan', 'stand-alone body');
+      const got = await store.getDocumentOriginalText('orphan');
+      expect(got).toBe('stand-alone body');
+    });
+
+    test('set preserves unrelated doc fields after upsert', async () => {
+      await store.upsertDocument('doc1', { source: 'test', tags: ['a'] }, [
+        { text: 'chunk', embedding: [1, 0, 0], chunkIndex: 0 }
+      ]);
+      await store.setDocumentOriginalText('doc1', 'full text');
+
+      const doc = await store.getDocument('doc1');
+      expect(doc.source).toBe('test');
+      expect(doc.tags).toEqual(['a']);
+
+      const got = await store.getDocumentOriginalText('doc1');
+      expect(got).toBe('full text');
+    });
+  });
+
   test('list documents with tag filter', async () => {
     await store.upsertDocument('doc1', { source: 'test', tags: ['api', 'docs'] }, [
       { text: 'a', embedding: [1, 0, 0], chunkIndex: 0 }

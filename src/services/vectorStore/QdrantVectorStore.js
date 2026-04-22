@@ -349,6 +349,54 @@ class QdrantVectorStore extends VectorStoreAdapter {
       return { healthy: false, type: 'qdrant', error: e.message };
     }
   }
+
+  /**
+   * Find the chunk-0 point for a document and return its payload.
+   * Returns the raw point (with `id` and `payload`) or null if absent.
+   * Internal helper — used by {get,set}DocumentOriginalText.
+   */
+  async _findChunkZeroPoint(documentId) {
+    const points = await this._scrollByFilter(
+      null,
+      1,
+      {
+        must: [
+          { key: 'documentId', match: { value: documentId } },
+          { key: 'chunkIndex', match: { value: 0 } }
+        ]
+      }
+    );
+    return points.length > 0 ? points[0] : null;
+  }
+
+  async getDocumentOriginalText(documentId) {
+    const point = await this._findChunkZeroPoint(documentId);
+    if (!point) return null;
+    return point.payload?.originalText ?? null;
+  }
+
+  async setDocumentOriginalText(documentId, text) {
+    const point = await this._findChunkZeroPoint(documentId);
+    if (!point) {
+      throw new Error(`cannot set originalText: no chunk-0 for ${documentId}`);
+    }
+    const res = await fetchWithTimeout(
+      `${this.qdrantUrl}/collections/${this.collectionName}/points/payload`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          payload: { originalText: text },
+          points: [point.id]
+        })
+      },
+      QDRANT_TIMEOUT
+    );
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`Qdrant setPayload failed: ${res.status} ${body}`);
+    }
+  }
 }
 
 module.exports = QdrantVectorStore;

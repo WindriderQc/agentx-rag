@@ -571,6 +571,129 @@ describe('QdrantVectorStore.deleteDocument', () => {
   });
 });
 
+describe('QdrantVectorStore originalText get/set (0163)', () => {
+  let store;
+
+  beforeEach(() => {
+    fetch.mockReset();
+    store = new QdrantVectorStore({
+      qdrantUrl: 'http://qdrant:6333',
+      collectionName: 'test'
+    });
+  });
+
+  it('getDocumentOriginalText scrolls chunk-0 and returns payload.originalText', async () => {
+    // _scrollByFilter call: returns 1 point with payload.originalText
+    fetch.mockResolvedValueOnce(mockOk({
+      result: {
+        points: [
+          { id: 'uuid-chunk-0', payload: { documentId: 'doc-1', chunkIndex: 0, originalText: 'hello\nworld — é' } }
+        ]
+      }
+    }));
+
+    const text = await store.getDocumentOriginalText('doc-1');
+    expect(text).toBe('hello\nworld — é');
+
+    // Verify scroll filter uses documentId + chunkIndex=0
+    const scrollCall = fetch.mock.calls[0];
+    expect(scrollCall[0]).toContain('/points/scroll');
+    const scrollBody = JSON.parse(scrollCall[1].body);
+    expect(scrollBody.filter).toEqual({
+      must: [
+        { key: 'documentId', match: { value: 'doc-1' } },
+        { key: 'chunkIndex', match: { value: 0 } }
+      ]
+    });
+  });
+
+  it('getDocumentOriginalText returns null when no chunk-0 exists', async () => {
+    fetch.mockResolvedValueOnce(mockOk({ result: { points: [] } }));
+
+    const text = await store.getDocumentOriginalText('doc-missing');
+    expect(text).toBeNull();
+    expect(text === undefined).toBe(false);
+  });
+
+  it('getDocumentOriginalText returns null when chunk-0 exists but payload lacks originalText', async () => {
+    fetch.mockResolvedValueOnce(mockOk({
+      result: {
+        points: [
+          { id: 'uuid-0', payload: { documentId: 'doc-1', chunkIndex: 0 } }
+        ]
+      }
+    }));
+
+    const text = await store.getDocumentOriginalText('doc-1');
+    expect(text).toBeNull();
+  });
+
+  it('setDocumentOriginalText locates chunk-0 and patches its payload', async () => {
+    // scroll — returns chunk-0 point
+    fetch.mockResolvedValueOnce(mockOk({
+      result: {
+        points: [
+          { id: 'uuid-chunk-0', payload: { documentId: 'doc-1', chunkIndex: 0 } }
+        ]
+      }
+    }));
+    // setPayload — ok
+    fetch.mockResolvedValueOnce(mockOk());
+
+    await store.setDocumentOriginalText('doc-1', 'hello\nworld — é');
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+    const [url, opts] = fetch.mock.calls[1];
+    expect(url).toContain('/points/payload');
+    expect(opts.method).toBe('POST');
+    const body = JSON.parse(opts.body);
+    expect(body.payload).toEqual({ originalText: 'hello\nworld — é' });
+    expect(body.points).toEqual(['uuid-chunk-0']);
+  });
+
+  it('setDocumentOriginalText throws a clear error when chunk-0 is missing', async () => {
+    fetch.mockResolvedValueOnce(mockOk({ result: { points: [] } }));
+
+    await expect(store.setDocumentOriginalText('ghost', 'body'))
+      .rejects.toThrow('cannot set originalText: no chunk-0 for ghost');
+    // No setPayload attempted
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('setDocumentOriginalText throws when Qdrant setPayload fails', async () => {
+    fetch.mockResolvedValueOnce(mockOk({
+      result: {
+        points: [{ id: 'uuid-0', payload: { documentId: 'd', chunkIndex: 0 } }]
+      }
+    }));
+    fetch.mockResolvedValueOnce(mockFail(500, 'server error'));
+
+    await expect(store.setDocumentOriginalText('d', 'x'))
+      .rejects.toThrow('Qdrant setPayload failed: 500');
+  });
+
+  it('set-then-get roundtrip (two-phase) returns the stored text', async () => {
+    // Phase 1: setDocumentOriginalText
+    //   scroll finds chunk-0
+    fetch.mockResolvedValueOnce(mockOk({
+      result: { points: [{ id: 'uuid-0', payload: { documentId: 'd', chunkIndex: 0 } }] }
+    }));
+    //   setPayload ok
+    fetch.mockResolvedValueOnce(mockOk());
+    // Phase 2: getDocumentOriginalText
+    //   scroll finds chunk-0 with originalText in payload
+    fetch.mockResolvedValueOnce(mockOk({
+      result: {
+        points: [{ id: 'uuid-0', payload: { documentId: 'd', chunkIndex: 0, originalText: 'hello\nworld — é' } }]
+      }
+    }));
+
+    await store.setDocumentOriginalText('d', 'hello\nworld — é');
+    const got = await store.getDocumentOriginalText('d');
+    expect(got).toBe('hello\nworld — é');
+  });
+});
+
 describe('QdrantVectorStore.healthCheck', () => {
   let store;
 
