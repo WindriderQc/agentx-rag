@@ -88,7 +88,7 @@ router.get('/embedding-migration/status', async (req, res) => {
 
 router.post('/embedding-migration/reindex', async (req, res) => {
   try {
-    const { confirm, force } = req.body || {};
+    const { confirm, force, acceptContentDrift } = req.body || {};
     if (confirm !== true) {
       return sendError(res, 400, 'CONFIRMATION_REQUIRED', 'Send { "confirm": true } to start reindex');
     }
@@ -108,6 +108,36 @@ router.post('/embedding-migration/reindex', async (req, res) => {
         'Stored and current embedding dimensions match; no reindex required. Send { force: true } to override.'
       );
     }
+
+    // Holding-pattern gate (0164 — Architect B §6 stopgap).
+    // Reindex currently reconstructs text by concatenating overlapping chunks,
+    // which inflates overlap regions on every run (bug: rag#reindex-overlap-content-duplication).
+    // Until Architect B T1–T6 replaces chunk-concat with real originalText retrieval,
+    // any reindex — including force-overrides — must explicitly acknowledge the drift.
+    // This gate is removed in T6 once originalText backfill is complete.
+    //
+    // NOTE: we hand-build this 400 instead of going through sendError() so the
+    // diagnostic `message` field is preserved in production (sendError hides
+    // `detail` when NODE_ENV=production). The operator-facing prose — including
+    // the bug handle `rag#reindex-overlap-content-duplication` — must be
+    // visible in live responses so a forced reindex is truly informed consent.
+    if (acceptContentDrift !== true) {
+      return res.status(400).json({
+        ok: false,
+        error: 'CONTENT_DRIFT_NOT_ACCEPTED',
+        message: 'Reindex currently reconstructs text from overlapping chunks, which inflates overlap regions on every run. This is a known issue tracked as rag#reindex-overlap-content-duplication. Set acceptContentDrift: true to proceed anyway, e.g. for a one-time dimension migration where retrieval quality can be re-verified afterward.',
+      });
+    }
+
+    logger.warn('[reindex] proceeding with acceptContentDrift=true — known content-drift bug (rag#reindex-overlap-content-duplication)', {
+      migrationNeeded: status.migrationNeeded,
+      force: force === true,
+      currentModel: status.currentModel,
+      currentDimension: status.currentDimension,
+      storedDimension: status.storedDimension,
+      documentCount: status.documentCount,
+      chunkCount: status.chunkCount,
+    });
 
     // Check if a reindex job is already running
     for (const [, job] of jobs) {

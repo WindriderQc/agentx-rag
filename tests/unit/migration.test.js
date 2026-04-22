@@ -192,7 +192,7 @@ describe('POST /api/rag/embedding-migration/reindex', () => {
     const app = buildApp();
     const res = await request(app)
       .post('/api/rag/embedding-migration/reindex')
-      .send({ confirm: true });
+      .send({ confirm: true, acceptContentDrift: true });
 
     expect(res.status).toBe(202);
     expect(res.body.ok).toBe(true);
@@ -208,12 +208,12 @@ describe('POST /api/rag/embedding-migration/reindex', () => {
 
     const first = await request(app)
       .post('/api/rag/embedding-migration/reindex')
-      .send({ confirm: true });
+      .send({ confirm: true, acceptContentDrift: true });
     expect(first.status).toBe(202);
 
     const second = await request(app)
       .post('/api/rag/embedding-migration/reindex')
-      .send({ confirm: true });
+      .send({ confirm: true, acceptContentDrift: true });
     expect(second.status).toBe(409);
     expect(second.body.error).toBe('REINDEX_ALREADY_RUNNING');
     expect(second.body.data.activeJobId).toBe(first.body.data.jobId);
@@ -225,7 +225,7 @@ describe('POST /api/rag/embedding-migration/reindex', () => {
     const app = buildApp();
     const res = await request(app)
       .post('/api/rag/embedding-migration/reindex')
-      .send({ confirm: true });
+      .send({ confirm: true, acceptContentDrift: true });
 
     const jobId = res.body.data.jobId;
 
@@ -258,14 +258,14 @@ describe('POST /api/rag/embedding-migration/reindex', () => {
     expect(_mockRagStore.listDocuments).not.toHaveBeenCalled();
   });
 
-  it('accepts { confirm: true, force: true } even when migration is not needed', async () => {
+  it('accepts { confirm: true, force: true, acceptContentDrift: true } even when migration is not needed', async () => {
     _mockRagStore.getStats.mockResolvedValue(MIGRATION_NOT_NEEDED_STATS);
     _mockRagStore.listDocuments.mockResolvedValue({ documents: [], total: 0 });
 
     const app = buildApp();
     const res = await request(app)
       .post('/api/rag/embedding-migration/reindex')
-      .send({ confirm: true, force: true });
+      .send({ confirm: true, force: true, acceptContentDrift: true });
 
     // Accepted: 202 (running) or 409 (another reindex already running). Both prove
     // the guard was bypassed by force:true. In this isolated test, the jobs map
@@ -278,18 +278,68 @@ describe('POST /api/rag/embedding-migration/reindex', () => {
     }
   });
 
-  it('accepts { confirm: true } without force when migrationNeeded is true (happy path preserved)', async () => {
+  it('accepts { confirm: true, acceptContentDrift: true } without force when migrationNeeded is true (happy path preserved)', async () => {
     // Default beforeEach already sets MIGRATION_NEEDED_STATS.
     _mockRagStore.listDocuments.mockResolvedValue({ documents: [], total: 0 });
 
     const app = buildApp();
     const res = await request(app)
       .post('/api/rag/embedding-migration/reindex')
-      .send({ confirm: true });
+      .send({ confirm: true, acceptContentDrift: true });
 
     expect(res.status).toBe(202);
     expect(res.body.ok).toBe(true);
     expect(res.body.data.jobId).toMatch(/^reindex-\d+$/);
+  });
+
+  // ── Content-drift gate (0164) ──────────────────────────
+  // Holding-pattern gate while Architect B T1–T6 replaces chunk-concat
+  // reconstruction with real originalText retrieval. Any reindex — including
+  // force-overrides — must explicitly acknowledge the known content-drift bug.
+
+  it('returns 400 CONTENT_DRIFT_NOT_ACCEPTED when confirm+force but acceptContentDrift missing', async () => {
+    _mockRagStore.getStats.mockResolvedValue(MIGRATION_NOT_NEEDED_STATS);
+
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/rag/embedding-migration/reindex')
+      .send({ confirm: true, force: true });
+
+    expect(res.status).toBe(400);
+    expect(res.body.ok).toBe(false);
+    expect(res.body.error).toBe('CONTENT_DRIFT_NOT_ACCEPTED');
+    expect(res.body.message || res.body.detail || '').toContain('rag#reindex-overlap-content-duplication');
+    // No job should have been started.
+    expect(_mockRagStore.listDocuments).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 CONTENT_DRIFT_NOT_ACCEPTED when acceptContentDrift is explicitly false', async () => {
+    _mockRagStore.getStats.mockResolvedValue(MIGRATION_NOT_NEEDED_STATS);
+
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/rag/embedding-migration/reindex')
+      .send({ confirm: true, force: true, acceptContentDrift: false });
+
+    expect(res.status).toBe(400);
+    expect(res.body.ok).toBe(false);
+    expect(res.body.error).toBe('CONTENT_DRIFT_NOT_ACCEPTED');
+    expect(_mockRagStore.listDocuments).not.toHaveBeenCalled();
+  });
+
+  it('returns 202 when confirm+force+acceptContentDrift all true (gate satisfied)', async () => {
+    _mockRagStore.getStats.mockResolvedValue(MIGRATION_NOT_NEEDED_STATS);
+    _mockRagStore.listDocuments.mockResolvedValue({ documents: [], total: 0 });
+
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/rag/embedding-migration/reindex')
+      .send({ confirm: true, force: true, acceptContentDrift: true });
+
+    expect(res.status).toBe(202);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.data.jobId).toMatch(/^reindex-\d+$/);
+    expect(res.body.data.status).toBe('running');
   });
 });
 
@@ -325,7 +375,7 @@ describe('GET /api/rag/embedding-migration/reindex/:jobId', () => {
     const app = buildApp();
     const startRes = await request(app)
       .post('/api/rag/embedding-migration/reindex')
-      .send({ confirm: true });
+      .send({ confirm: true, acceptContentDrift: true });
 
     const jobId = startRes.body.data.jobId;
 
@@ -364,7 +414,7 @@ describe('GET /api/rag/embedding-migration/reindex/:jobId', () => {
     const app = buildApp();
     const startRes = await request(app)
       .post('/api/rag/embedding-migration/reindex')
-      .send({ confirm: true });
+      .send({ confirm: true, acceptContentDrift: true });
 
     const jobId = startRes.body.data.jobId;
 
@@ -408,7 +458,7 @@ describe('GET /api/rag/embedding-migration/reindex/:jobId', () => {
     const app = buildApp();
     const startRes = await request(app)
       .post('/api/rag/embedding-migration/reindex')
-      .send({ confirm: true });
+      .send({ confirm: true, acceptContentDrift: true });
 
     const jobId = startRes.body.data.jobId;
 
