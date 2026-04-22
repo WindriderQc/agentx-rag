@@ -131,8 +131,25 @@ describe('GET /api/rag/embedding-migration/status', () => {
 });
 
 describe('POST /api/rag/embedding-migration/reindex', () => {
+  // Default stats for reindex tests: migrationNeeded === true (dims differ, docs present)
+  // so the new no-op guard does not block the legacy happy-path assertions.
+  const MIGRATION_NEEDED_STATS = {
+    vectorDimension: 384,
+    documentCount: 10,
+    chunkCount: 80,
+  };
+  // Stats where dims match and docs exist: migrationNeeded === false — triggers the guard.
+  const MIGRATION_NOT_NEEDED_STATS = {
+    vectorDimension: 768,
+    documentCount: 42,
+    chunkCount: 310,
+  };
+
   beforeEach(() => {
     jest.clearAllMocks();
+    _mockEmbeddingsService.model = 'nomic-embed-text:v1.5';
+    _mockEmbeddingsService.getDimension.mockReturnValue(768);
+    _mockRagStore.getStats.mockResolvedValue(MIGRATION_NEEDED_STATS);
     // Clear all jobs between tests
     const jobs = getJobsMap();
     jobs.clear();
@@ -221,11 +238,72 @@ describe('POST /api/rag/embedding-migration/reindex', () => {
     expect(job.completedAt).not.toBeNull();
     expect(job.progress.total).toBe(0);
   });
+
+  // ── No-op guard (0161) ─────────────────────────────────
+  // When stored and current embedding dimensions already match, the reindex
+  // is pure wasted GPU time. The POST handler must refuse unless force:true.
+
+  it('returns 400 MIGRATION_NOT_NEEDED when dimensions match and force is absent', async () => {
+    _mockRagStore.getStats.mockResolvedValue(MIGRATION_NOT_NEEDED_STATS);
+
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/rag/embedding-migration/reindex')
+      .send({ confirm: true });
+
+    expect(res.status).toBe(400);
+    expect(res.body.ok).toBe(false);
+    expect(res.body.error).toBe('MIGRATION_NOT_NEEDED');
+    // listDocuments must not be touched — the guard rejects before the job runs.
+    expect(_mockRagStore.listDocuments).not.toHaveBeenCalled();
+  });
+
+  it('accepts { confirm: true, force: true } even when migration is not needed', async () => {
+    _mockRagStore.getStats.mockResolvedValue(MIGRATION_NOT_NEEDED_STATS);
+    _mockRagStore.listDocuments.mockResolvedValue({ documents: [], total: 0 });
+
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/rag/embedding-migration/reindex')
+      .send({ confirm: true, force: true });
+
+    // Accepted: 202 (running) or 409 (another reindex already running). Both prove
+    // the guard was bypassed by force:true. In this isolated test, the jobs map
+    // is cleared in beforeEach so we should always see 202.
+    expect([202, 409]).toContain(res.status);
+    if (res.status === 202) {
+      expect(res.body.ok).toBe(true);
+      expect(res.body.data.jobId).toMatch(/^reindex-\d+$/);
+      expect(res.body.data.status).toBe('running');
+    }
+  });
+
+  it('accepts { confirm: true } without force when migrationNeeded is true (happy path preserved)', async () => {
+    // Default beforeEach already sets MIGRATION_NEEDED_STATS.
+    _mockRagStore.listDocuments.mockResolvedValue({ documents: [], total: 0 });
+
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/rag/embedding-migration/reindex')
+      .send({ confirm: true });
+
+    expect(res.status).toBe(202);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.data.jobId).toMatch(/^reindex-\d+$/);
+  });
 });
 
 describe('GET /api/rag/embedding-migration/reindex/:jobId', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    _mockEmbeddingsService.model = 'nomic-embed-text:v1.5';
+    _mockEmbeddingsService.getDimension.mockReturnValue(768);
+    // Dimensions differ so the POST no-op guard does not block these tests.
+    _mockRagStore.getStats.mockResolvedValue({
+      vectorDimension: 384,
+      documentCount: 10,
+      chunkCount: 80,
+    });
     const jobs = getJobsMap();
     jobs.clear();
   });

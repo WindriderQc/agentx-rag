@@ -18,39 +18,65 @@ const { sendError } = require('../src/utils/response');
 const jobs = new Map();
 const MAX_ERRORS = 100;
 
+/**
+ * Compute the current embedding migration status.
+ *
+ * Shared helper consumed by:
+ *   - GET  /embedding-migration/status  — exposes the shape to clients
+ *   - POST /embedding-migration/reindex — guards against no-op reindexes
+ *
+ * Both endpoints MUST derive `migrationNeeded` from the same source so the
+ * UI signal and the backend guard can never disagree.
+ *
+ * @returns {Promise<{
+ *   currentModel: string,
+ *   currentDimension: number,
+ *   storedDimension: number,
+ *   dimensionMatch: boolean,
+ *   documentCount: number,
+ *   chunkCount: number,
+ *   migrationNeeded: boolean,
+ *   note?: string
+ * }>}
+ */
+async function computeMigrationStatus() {
+  const ragStore = getRagStore();
+  const embeddingsService = getEmbeddingsService();
+
+  const stats = await ragStore.getStats();
+  const currentDimension = embeddingsService.getDimension();
+  const currentModel = embeddingsService.model;
+  const storedDimension = stats.vectorDimension || 0;
+  const documentCount = stats.documentCount || 0;
+  const chunkCount = stats.chunkCount || 0;
+
+  const dimensionMatch = storedDimension === 0 || currentDimension === storedDimension;
+  // Migration needed: dimensions differ AND there are documents to migrate
+  const migrationNeeded = !dimensionMatch && documentCount > 0;
+
+  const data = {
+    currentModel,
+    currentDimension,
+    storedDimension,
+    dimensionMatch,
+    documentCount,
+    chunkCount,
+    migrationNeeded,
+  };
+
+  // Warn about dimension change requiring collection recreation
+  if (migrationNeeded) {
+    data.note = 'Dimension change requires collection recreation. Back up data before proceeding.';
+  }
+
+  return data;
+}
+
 // ── GET /embedding-migration/status ─────────────────────
 
 router.get('/embedding-migration/status', async (req, res) => {
   try {
-    const ragStore = getRagStore();
-    const embeddingsService = getEmbeddingsService();
-
-    const stats = await ragStore.getStats();
-    const currentDimension = embeddingsService.getDimension();
-    const currentModel = embeddingsService.model;
-    const storedDimension = stats.vectorDimension || 0;
-    const documentCount = stats.documentCount || 0;
-    const chunkCount = stats.chunkCount || 0;
-
-    const dimensionMatch = storedDimension === 0 || currentDimension === storedDimension;
-    // Migration needed: dimensions differ AND there are documents to migrate
-    const migrationNeeded = !dimensionMatch && documentCount > 0;
-
-    const data = {
-      currentModel,
-      currentDimension,
-      storedDimension,
-      dimensionMatch,
-      documentCount,
-      chunkCount,
-      migrationNeeded,
-    };
-
-    // Warn about dimension change requiring collection recreation
-    if (migrationNeeded) {
-      data.note = 'Dimension change requires collection recreation. Back up data before proceeding.';
-    }
-
+    const data = await computeMigrationStatus();
     res.json({ ok: true, data });
   } catch (err) {
     logger.error('Embedding migration status error:', err);
@@ -62,9 +88,25 @@ router.get('/embedding-migration/status', async (req, res) => {
 
 router.post('/embedding-migration/reindex', async (req, res) => {
   try {
-    const { confirm } = req.body || {};
+    const { confirm, force } = req.body || {};
     if (confirm !== true) {
       return sendError(res, 400, 'CONFIRMATION_REQUIRED', 'Send { "confirm": true } to start reindex');
+    }
+
+    // Guard: refuse no-op reindex when dimensions already match.
+    // The reindex walks the entire corpus and re-embeds every chunk — burning
+    // GPU time for zero benefit. Combined with the deferred overlap-duplication
+    // bug, repeated no-op reindexes actively corrupt the corpus. Callers who
+    // still want to force a reindex (e.g. to recover from a different corruption)
+    // may pass { force: true }.
+    const status = await computeMigrationStatus();
+    if (status.migrationNeeded === false && force !== true) {
+      return sendError(
+        res,
+        400,
+        'MIGRATION_NOT_NEEDED',
+        'Stored and current embedding dimensions match; no reindex required. Send { force: true } to override.'
+      );
     }
 
     // Check if a reindex job is already running
