@@ -208,21 +208,27 @@
         embeddingModel = data.embeddingModel;
       }
 
-      var storedDimension = data.vectorDimension || 0;
+      // Fetch migration status directly — this endpoint computes migrationNeeded,
+      // dimensionMatch, storedDimension, currentDimension, and documentCount.
+      var migrationRes = await RAG.apiFetch('/api/rag/embedding-migration/status');
+      var migration = migrationRes.data || {};
+      var storedDimension = migration.storedDimension || 0;
+      var currentDimension = migration.currentDimension || 0;
 
       var html =
         '<div class="migration-row"><span class="migration-label">Embedding Provider</span><span class="migration-value">' + esc(String(embeddingProvider)) + '</span></div>' +
         '<div class="migration-row"><span class="migration-label">Configured Model</span><span class="migration-value">' + esc(String(embeddingModel)) + '</span></div>' +
         '<div class="migration-row"><span class="migration-label">Embedding Endpoint</span><span class="migration-value">' + esc(String(embeddingEndpoint)) + '</span></div>' +
-        '<div class="migration-row"><span class="migration-label">Stored Vector Dimension</span><span class="migration-value">' + storedDimension + '</span></div>';
+        '<div class="migration-row"><span class="migration-label">Stored Vector Dimension</span><span class="migration-value">' + storedDimension + '</span></div>' +
+        '<div class="migration-row"><span class="migration-label">Current Model Dimension</span><span class="migration-value">' + currentDimension + '</span></div>';
 
-      // Assess mismatch state
-      var assessment = assessMismatch(storedDimension);
+      // Assess mismatch state from migration status payload
+      var assessment = assessMismatch(migration);
       html += '<div style="margin-top:12px;">' + assessment.html + '</div>';
 
       migrationStatus.innerHTML = html;
 
-      // Show reindex button
+      // Show reindex button; enable only when migration is needed
       reindexActions.style.display = 'block';
       btnReindex.disabled = !assessment.mismatch;
     } catch (err) {
@@ -234,21 +240,25 @@
     }
   }
 
-  function assessMismatch(storedDim) {
-    if (storedDim === 0) {
-      return {
-        mismatch: false,
-        html: '<span class="mismatch-neutral">No vectors stored yet</span>'
-      };
+  function assessMismatch(status) {
+    var s = status || {};
+    var storedDimension = s.storedDimension || 0;
+    var currentDimension = s.currentDimension || 0;
+    var documentCount = s.documentCount || 0;
+    var mismatch = !!s.migrationNeeded;
+
+    var html;
+    if (storedDimension === 0) {
+      html = '<span class="mismatch-neutral">No vectors stored yet</span>';
+    } else if (s.dimensionMatch === true) {
+      html = '<span class="mismatch-ok">Dimensions match (' + storedDimension + 'd)</span>';
+    } else if (s.migrationNeeded === true) {
+      html = '<span class="mismatch-warn">Dimension mismatch: stored ' + storedDimension + 'd vs current ' + currentDimension + 'd (' + documentCount + ' docs)</span>';
+    } else {
+      html = '<span class="mismatch-neutral">Migration status unavailable</span>';
     }
 
-    // We only have the stored dimension from Qdrant.
-    // Without a separate "configured dimension" from the API, we show the stored
-    // dimension as current and indicate the state as healthy.
-    return {
-      mismatch: false,
-      html: '<span class="mismatch-ok">Dimensions available (' + storedDim + 'd)</span>'
-    };
+    return { mismatch: mismatch, html: html };
   }
 
   async function triggerReindex() {
