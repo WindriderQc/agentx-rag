@@ -146,6 +146,7 @@ app.use('/api/rag', require('./routes/manifest.routes'));
 app.use('/api/rag', require('./routes/migration.routes'));
 app.use('/api/rag', require('./routes/metrics.routes'));
 app.use('/api/rag', require('./routes/telemetry.routes'));
+app.use('/api/rag', require('./routes/snapshots.routes'));
 
 app.use((req, res) => {
   res.status(404).json({ ok: false, error: 'Not found' });
