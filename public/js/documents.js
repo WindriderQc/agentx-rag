@@ -22,6 +22,53 @@
     els.loadingState = document.getElementById('loading-state');
     els.errorState  = document.getElementById('error-state');
     els.table       = document.getElementById('doc-table');
+    els.emptyBanner = document.getElementById('empty-index-banner');
+    els.emptyDetail = document.getElementById('empty-banner-detail');
+  }
+
+  // ── Empty-index banner (shared pattern; see dashboard.js) ──
+
+  function renderEmptyBanner(statusData) {
+    if (!els.emptyBanner) return;
+    var docs = Number(statusData && statusData.documentCount);
+    if (!isFinite(docs) || docs > 0) {
+      els.emptyBanner.style.display = 'none';
+      return;
+    }
+    els.emptyBanner.style.display = 'flex';
+    var embModel = (statusData && statusData.embeddingModel) || 'unknown';
+    var dim = (statusData && statusData.vectorDimension) || '?';
+    if (els.emptyDetail) {
+      els.emptyDetail.textContent = 'Embedding: ' + embModel + ' · dim ' + dim + ' · last ingest: checking…';
+    }
+    fetch('/api/rag/metrics', { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (payload) {
+        if (!els.emptyDetail) return;
+        var li = payload && payload.data && payload.data.lastIngest;
+        var ingestStr;
+        if (!li || !li.timestamp) {
+          ingestStr = 'last ingest: never';
+        } else {
+          var s = Math.floor((Date.now() - new Date(li.timestamp).getTime()) / 1000);
+          var age = s < 60 ? s + 's'
+                  : s < 3600 ? Math.floor(s / 60) + 'm'
+                  : s < 86400 ? Math.floor(s / 3600) + 'h'
+                  : Math.floor(s / 86400) + 'd';
+          ingestStr = 'last ingest: ' + age + ' ago' + (li.source ? ' (' + li.source + ')' : '');
+        }
+        els.emptyDetail.textContent = 'Embedding: ' + embModel + ' · dim ' + dim + ' · ' + ingestStr;
+      })
+      .catch(function () {});
+  }
+
+  function checkEmptyIndex() {
+    if (!window.RAG || typeof window.RAG.getStatus !== 'function') return;
+    window.RAG.getStatus()
+      .then(function (resp) { renderEmptyBanner(resp && resp.data); })
+      .catch(function () {
+        if (els.emptyBanner) els.emptyBanner.style.display = 'none';
+      });
   }
 
   // ── State ─────────────────────────────────────────────────
@@ -268,6 +315,7 @@
 
   document.addEventListener('DOMContentLoaded', function () {
     cacheElements();
+    checkEmptyIndex();
 
     els.btnApply.addEventListener('click', function () {
       loadDocuments(getFilters());

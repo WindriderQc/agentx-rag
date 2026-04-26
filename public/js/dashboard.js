@@ -23,6 +23,8 @@
     els.statChunks      = document.getElementById('stat-chunks');
     els.statDimension   = document.getElementById('stat-dimension');
     els.lastUpdated     = document.getElementById('last-updated');
+    els.emptyBanner     = document.getElementById('empty-index-banner');
+    els.emptyDetail     = document.getElementById('empty-banner-detail');
   }
 
   // ── Render helpers ────────────────────────────────────────
@@ -82,6 +84,49 @@
     if (els.statDocs) els.statDocs.textContent = formatNumber(data.documentCount);
     if (els.statChunks) els.statChunks.textContent = formatNumber(data.chunkCount);
     if (els.statDimension) els.statDimension.textContent = data.vectorDimension || '--';
+
+    // Empty-index banner: loud when documentCount === 0
+    renderEmptyBanner(data);
+  }
+
+  function renderEmptyBanner(data) {
+    if (!els.emptyBanner) return;
+    var docs = Number(data && data.documentCount);
+    if (!isFinite(docs) || docs > 0) {
+      els.emptyBanner.style.display = 'none';
+      return;
+    }
+    els.emptyBanner.style.display = 'flex';
+    // Fill in what we already know synchronously, then refine with metrics fetch.
+    var embModel = (data && data.embeddingModel) || 'unknown';
+    var dim = (data && data.vectorDimension) || '?';
+    var baseline = 'Embedding: ' + embModel + ' · dim ' + dim + ' · last ingest: checking…';
+    if (els.emptyDetail) els.emptyDetail.textContent = baseline;
+
+    // Metrics endpoint exposes lastIngest {timestamp, source}. Fire-and-forget.
+    fetch('/api/rag/metrics', { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (payload) {
+        if (!els.emptyDetail) return;
+        var li = payload && payload.data && payload.data.lastIngest;
+        var ingestStr;
+        if (!li || !li.timestamp) {
+          ingestStr = 'last ingest: never';
+        } else {
+          var age = ageSince(new Date(li.timestamp));
+          ingestStr = 'last ingest: ' + age + ' ago' + (li.source ? ' (' + li.source + ')' : '');
+        }
+        els.emptyDetail.textContent = 'Embedding: ' + embModel + ' · dim ' + dim + ' · ' + ingestStr;
+      })
+      .catch(function () { /* baseline already rendered */ });
+  }
+
+  function ageSince(date) {
+    var s = Math.floor((Date.now() - date.getTime()) / 1000);
+    if (s < 60) return s + 's';
+    if (s < 3600) return Math.floor(s / 60) + 'm';
+    if (s < 86400) return Math.floor(s / 3600) + 'h';
+    return Math.floor(s / 86400) + 'd';
   }
 
   function renderStatusFailure() {
@@ -90,6 +135,7 @@
     if (els.statDocs) els.statDocs.textContent = '--';
     if (els.statChunks) els.statChunks.textContent = '--';
     if (els.statDimension) els.statDimension.textContent = '--';
+    if (els.emptyBanner) els.emptyBanner.style.display = 'none';
   }
 
   function renderDepRow(el, label, state, detail) {
