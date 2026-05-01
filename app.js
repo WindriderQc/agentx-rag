@@ -26,6 +26,11 @@ app.use(cors({
   origin: allowedOrigins,
   credentials: true
 }));
+
+// Buddy proxy — forward /api/buddy/* (incl. SSE event stream) to core.
+// Mounted BEFORE express.json so request bodies stream through unparsed.
+app.use('/api/buddy', require('./routes/buddy-proxy'));
+
 app.use(express.json({ limit: '10mb' }));
 
 // Expose request hostname to all templates (for cross-service nav links).
@@ -59,6 +64,7 @@ app.get('/', (req, res) => {
     service: 'rag',
     activePage: 'rag',
     bodyClass: 'dashboard-body',
+    showBuddy: true,
     headCss: ragHeadCss,
     footerJs: '<script src="/js/api.js"></script>\n<script src="/js/dashboard.js"></script>'
   });
@@ -70,6 +76,7 @@ app.get('/documents', (req, res) => {
     title: 'AgentX RAG — Documents',
     service: 'rag',
     activePage: 'rag',
+    showBuddy: true,
     headCss: ragHeadCss,
     footerJs: '<script src="/js/api.js"></script>\n<script src="/js/documents.js"></script>'
   });
@@ -81,6 +88,7 @@ app.get('/search', (req, res) => {
     title: 'AgentX RAG — Search Playground',
     service: 'rag',
     activePage: 'rag',
+    showBuddy: true,
     headCss: ragHeadCss,
     footerJs: '<script src="/js/api.js"></script>\n<script src="/js/search.js"></script>'
   });
@@ -92,6 +100,7 @@ app.get('/upload', (req, res) => {
     title: 'AgentX RAG — Upload',
     service: 'rag',
     activePage: 'rag',
+    showBuddy: true,
     headCss: ragHeadCss,
     footerJs: '<script src="/js/api.js"></script>\n<script src="/js/upload.js"></script>'
   });
@@ -103,6 +112,7 @@ app.get('/maintenance', (req, res) => {
     title: 'AgentX RAG — Maintenance',
     service: 'rag',
     activePage: 'rag',
+    showBuddy: true,
     headCss: ragHeadCss,
     footerJs: '<script src="/js/api.js"></script>\n<script src="/js/maintenance.js"></script>'
   });
