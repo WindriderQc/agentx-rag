@@ -64,12 +64,14 @@ class RagStore {
     // Persist original (pre-chunking) text so reindex can re-chunk from
     // source-of-truth instead of joining overlapping chunks (which would
     // duplicate overlap regions on every run). T2 of Architect-B (0163/0164).
-    // Failure here is logged but non-fatal: legacy/missing originalText
-    // makes reindex fall back to chunk-concat with a warning.
+    // Failure here is logged but non-fatal: this document will be flagged
+    // as unreindexable until re-ingested from source. T3 made reindex
+    // throw on missing originalText rather than silently falling back to
+    // chunk-concat (which is the very bug T2 + T3 fixed).
     try {
       await this.vectorStore.setDocumentOriginalText(documentId, text);
     } catch (err) {
-      logger.warn(`Failed to persist originalText for "${documentId}" — reindex will fall back to chunk-concat`, { error: err.message });
+      logger.warn(`Failed to persist originalText for "${documentId}" — document will be unreindexable until re-ingested from source`, { error: err.message });
     }
 
     logger.info(`Upserted document "${documentId}" — ${chunks.length} chunks`);
