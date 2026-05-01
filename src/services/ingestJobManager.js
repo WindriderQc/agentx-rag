@@ -7,6 +7,7 @@
 
 const crypto = require('crypto');
 const logger = require('../../config/logger');
+const { emitBuddyEvent } = require('../clients/buddyEventClient');
 
 /** @type {Map<string, object>} */
 const jobs = new Map();
@@ -38,6 +39,9 @@ function createJob(params = {}) {
 
   jobs.set(jobId, job);
   activeJobId = jobId;
+
+  emitBuddyEvent('ingest_started', 'data', 'RAG ingest scan started');
+
   return { jobId, job };
 }
 
@@ -77,6 +81,14 @@ function completeJob(jobId, summary) {
   if (activeJobId === jobId) {
     activeJobId = null;
   }
+
+  const processed = (summary && summary.processed) || 0;
+  const errors = (summary && summary.errors) || 0;
+  emitBuddyEvent(
+    'ingest_completed',
+    'data',
+    `RAG ingest done: ${processed} processed, ${errors} errors`
+  );
 }
 
 /**
@@ -95,6 +107,13 @@ function failJob(jobId, errorMessage) {
   if (activeJobId === jobId) {
     activeJobId = null;
   }
+
+  emitBuddyEvent(
+    'ingest_failed',
+    'data',
+    `RAG ingest failed: ${(errorMessage || 'unknown').slice(0, 120)}`,
+    'high'
+  );
 }
 
 /**
