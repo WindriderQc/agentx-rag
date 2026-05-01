@@ -88,17 +88,15 @@ router.get('/embedding-migration/status', async (req, res) => {
 
 router.post('/embedding-migration/reindex', async (req, res) => {
   try {
-    const { confirm, force, acceptContentDrift } = req.body || {};
+    const { confirm, force } = req.body || {};
     if (confirm !== true) {
       return sendError(res, 400, 'CONFIRMATION_REQUIRED', 'Send { "confirm": true } to start reindex');
     }
 
     // Guard: refuse no-op reindex when dimensions already match.
     // The reindex walks the entire corpus and re-embeds every chunk — burning
-    // GPU time for zero benefit. Combined with the deferred overlap-duplication
-    // bug, repeated no-op reindexes actively corrupt the corpus. Callers who
-    // still want to force a reindex (e.g. to recover from a different corruption)
-    // may pass { force: true }.
+    // GPU time for zero benefit. Callers who still want to force a reindex
+    // (e.g. to recover from a different corruption) may pass { force: true }.
     const status = await computeMigrationStatus();
     if (status.migrationNeeded === false && force !== true) {
       return sendError(
@@ -108,36 +106,6 @@ router.post('/embedding-migration/reindex', async (req, res) => {
         'Stored and current embedding dimensions match; no reindex required. Send { force: true } to override.'
       );
     }
-
-    // Holding-pattern gate (0164 — Architect B §6 stopgap).
-    // Reindex currently reconstructs text by concatenating overlapping chunks,
-    // which inflates overlap regions on every run (bug: rag#reindex-overlap-content-duplication).
-    // Until Architect B T1–T6 replaces chunk-concat with real originalText retrieval,
-    // any reindex — including force-overrides — must explicitly acknowledge the drift.
-    // This gate is removed in T6 once originalText backfill is complete.
-    //
-    // NOTE: we hand-build this 400 instead of going through sendError() so the
-    // diagnostic `message` field is preserved in production (sendError hides
-    // `detail` when NODE_ENV=production). The operator-facing prose — including
-    // the bug handle `rag#reindex-overlap-content-duplication` — must be
-    // visible in live responses so a forced reindex is truly informed consent.
-    if (acceptContentDrift !== true) {
-      return res.status(400).json({
-        ok: false,
-        error: 'CONTENT_DRIFT_NOT_ACCEPTED',
-        message: 'Reindex currently reconstructs text from overlapping chunks, which inflates overlap regions on every run. This is a known issue tracked as rag#reindex-overlap-content-duplication. Set acceptContentDrift: true to proceed anyway, e.g. for a one-time dimension migration where retrieval quality can be re-verified afterward.',
-      });
-    }
-
-    logger.warn('[reindex] proceeding with acceptContentDrift=true — known content-drift bug (rag#reindex-overlap-content-duplication)', {
-      migrationNeeded: status.migrationNeeded,
-      force: force === true,
-      currentModel: status.currentModel,
-      currentDimension: status.currentDimension,
-      storedDimension: status.storedDimension,
-      documentCount: status.documentCount,
-      chunkCount: status.chunkCount,
-    });
 
     // Check if a reindex job is already running
     for (const [, job] of jobs) {
@@ -216,15 +184,21 @@ async function _runReindex(job) {
     job.currentDocument = docId;
 
     try {
-      // Retrieve chunks from vector store to reconstruct full text
-      const chunks = await vectorStore.getDocumentChunks(docId);
-      const fullText = chunks.map((c) => c.text).join('');
+      // Read original (pre-chunking) text persisted at ingest time (Architect-B T2).
+      // Reconstructing from overlapping chunks would inflate overlap regions on every
+      // run (bug: rag#reindex-overlap-content-duplication, fixed by T3).
+      const originalText = await vectorStore.getDocumentOriginalText(docId);
+      if (!originalText) {
+        throw new Error(
+          'no originalText payload — document was ingested before originalText backfill (T2). Re-ingest from source to make it reindexable.'
+        );
+      }
 
       // Retrieve document metadata
       const metadata = await vectorStore.getDocument(docId);
 
-      // Re-embed and upsert with current model
-      await ragStore.upsertDocumentWithChunks(fullText, {
+      // Re-embed and upsert with current model — re-chunks from source-of-truth
+      await ragStore.upsertDocumentWithChunks(originalText, {
         documentId: docId,
         source: metadata?.source || 'unknown',
         tags: metadata?.tags || [],

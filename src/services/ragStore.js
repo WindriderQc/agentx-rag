@@ -61,6 +61,17 @@ class RagStore {
       ...(metadata.hash ? { hash: metadata.hash } : {}),
     }, chunks);
 
+    // Persist original (pre-chunking) text so reindex can re-chunk from
+    // source-of-truth instead of joining overlapping chunks (which would
+    // duplicate overlap regions on every run). T2 of Architect-B (0163/0164).
+    // Failure here is logged but non-fatal: legacy/missing originalText
+    // makes reindex fall back to chunk-concat with a warning.
+    try {
+      await this.vectorStore.setDocumentOriginalText(documentId, text);
+    } catch (err) {
+      logger.warn(`Failed to persist originalText for "${documentId}" — reindex will fall back to chunk-concat`, { error: err.message });
+    }
+
     logger.info(`Upserted document "${documentId}" — ${chunks.length} chunks`);
     return result;
   }
