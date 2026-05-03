@@ -45,6 +45,11 @@ app.get('/favicon.ico', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'favicon.svg'));
 });
 
+// Buddy static asset proxy — forwards a fixed set of /js/components/buddy*.js
+// + /css/buddy.css to core (mounted before static so it wins over any local
+// stale copy in rag/public/). Phase 6i.
+app.use(require('./routes/buddy-assets-proxy'));
+
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.static(path.join(__dirname, '..', 'core', 'public')));
 
